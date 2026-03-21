@@ -49,3 +49,11 @@ class Listing:
 class SearchResult:
     items: list[Listing]
     source_url: str
+
+
+@dataclass(slots=True)
+class SearchPageResult:
+    items: list[Listing]
+    page: int
+    source_url: str
+    had_candidates: bool

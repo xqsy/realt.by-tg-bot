@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 from dataclasses import replace
 
 from app.config import CITY_URLS, Settings
-from app.models import Listing, SearchResult, UserPreferences
+from app.models import Listing, SearchPageResult, SearchResult, UserPreferences
 
 PRICE_RE = re.compile(r"(\d[\d \xa0]{0,15})\s*р\./мес\.", re.IGNORECASE)
 USD_RE = re.compile(r"≈\s*(\d[\d \xa0]{0,10})\s*\$/мес\.", re.IGNORECASE)
@@ -19,7 +19,7 @@ ROOMS_RE = re.compile(r"(\d+)\s*комн", re.IGNORECASE)
 AREA_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*м²", re.IGNORECASE)
 FLOOR_RE = re.compile(r"(\d+)\s*/\s*(\d+)\s*этаж", re.IGNORECASE)
 PHONE_RE = re.compile(r"\+?\d[\d\s()\-]{7,}\d")
-DETAIL_PATH_RE = re.compile(r"^/(?:[a-z-]+-region/)?rent-flat-for-long/object/(\d+)/?$", re.IGNORECASE)
+DETAIL_PATH_RE = re.compile(r"^/(?:[a-z-]+/)?rent-flat-for-long/object/(\d+)/?$", re.IGNORECASE)
 SECTION_HEADERS = ["Параметры объекта", "Удобства", "Примечание", "Арендодатель", "Местоположение"]
 IGNORED_SECTION_LINES = {"Показать больше", "Скрыть", "Написать", "Показать контакты", "Контактное лицо"}
 PARAMETER_LABELS = [
@@ -66,21 +66,38 @@ class RealtParser:
         city_label, base_url = CITY_URLS[prefs.city_key]
         listings: list[Listing] = []
         seen_ids: set[str] = set()
-        for page in range(1, self._settings.max_pages_per_city + 1):
-            page_url = base_url if page == 1 else f"{base_url}?page={page}"
-            html = await self._fetch(page_url)
-            page_listings = self._extract_listings_from_page(html, base_url, city_label)
-            for listing in page_listings:
-                if listing.listing_id in seen_ids:
-                    continue
-                if not self._match_filters(listing, prefs):
-                    continue
-                seen_ids.add(listing.listing_id)
-                detailed = await self._enrich_listing(listing)
-                listings.append(detailed)
-                if limit is not None and len(listings) >= limit:
-                    return SearchResult(items=listings, source_url=page_url)
+        page = 1
+        while True:
+            page_result = await self.search_page(prefs, page=page, seen_ids=seen_ids)
+            listings.extend(page_result.items)
+            if limit is not None and len(listings) >= limit:
+                return SearchResult(items=listings[:limit], source_url=page_result.source_url)
+            if not page_result.had_candidates:
+                break
+            page += 1
         return SearchResult(items=listings, source_url=base_url)
+
+    async def search_page(self, prefs: UserPreferences, page: int, seen_ids: set[str] | None = None) -> SearchPageResult:
+        city_label, base_url = CITY_URLS[prefs.city_key]
+        page_url = base_url if page == 1 else f"{base_url}?page={page}"
+        html = await self._fetch(page_url)
+        page_listings = self._extract_listings_from_page(html, base_url, city_label)
+        collected: list[Listing] = []
+        seen = seen_ids if seen_ids is not None else set()
+        for listing in page_listings:
+            if listing.listing_id in seen:
+                continue
+            if not self._match_filters(listing, prefs):
+                continue
+            seen.add(listing.listing_id)
+            detailed = await self._enrich_listing(listing)
+            collected.append(detailed)
+        return SearchPageResult(
+            items=collected,
+            page=page,
+            source_url=page_url,
+            had_candidates=bool(page_listings),
+        )
 
     async def _fetch(self, url: str) -> str:
         response = await self._client.get(url)
@@ -596,15 +613,17 @@ class RealtParser:
         if not region_slug:
             region_name = self._extract_str(data, ["stateRegionName"])
             region_map = {
-                "Минск": "minsk",
+                "Минск": "",
                 "Брестская область": "brest-region",
                 "Могилевская область": "mogilev-region",
                 "Гомельская область": "gomel-region",
                 "Гродненская область": "grodno-region",
                 "Витебская область": "vitebsk-region",
             }
-            region_slug = region_map.get(region_name or "", "minsk")
-        return f"https://realt.by/{region_slug}/rent-flat-for-long/object/{listing_id}/"
+            region_slug = region_map.get(region_name or "", "")
+        if region_slug:
+            return f"https://realt.by/{region_slug}/rent-flat-for-long/object/{listing_id}/"
+        return f"https://realt.by/rent-flat-for-long/object/{listing_id}/"
 
     def _extract_phone_list(self, data: dict[str, object]) -> list[str]:
         results: set[str] = set()

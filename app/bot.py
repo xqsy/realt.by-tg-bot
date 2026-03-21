@@ -229,8 +229,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if lowered in {"поиск", "показать объявления"}:
         await _perform_search(update, context)
         return
-    prefs = repository.get(update.effective_user.id)
     analysis_wait_message = await update.message.reply_text("Анализирую запрос через ИИ...")
+    prefs = repository.get(update.effective_user.id)
     analysis = await query_analyzer.analyze(update.message.text, prefs)
     try:
         await analysis_wait_message.delete()

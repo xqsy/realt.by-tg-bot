@@ -8,40 +8,48 @@ def format_preferences(prefs: UserPreferences, city_label: str) -> str:
     max_price = str(prefs.max_price) if prefs.max_price is not None else "не задана"
     rooms = str(prefs.rooms) if prefs.rooms is not None else "любое"
     return (
+        "Текущие параметры поиска\n"
         f"Город: {city_label}\n"
-        f"Мин. цена: {min_price}\n"
-        f"Макс. цена: {max_price}\n"
+        f"Цена от: {min_price}\n"
+        f"Цена до: {max_price}\n"
         f"Комнаты: {rooms}"
     )
 
 
 def format_listing_short(index: int, listing: Listing) -> str:
-    pieces = [f"{index}. {listing.title}", listing.price_label]
+    pieces = [f"Объявление {index}", listing.title, f"Цена: {listing.price_label}"]
     details: list[str] = []
     if listing.rooms is not None:
-        details.append(f"{listing.rooms} комн.")
+        details.append(f"Комнаты: {listing.rooms}")
     if listing.area_m2 is not None:
-        details.append(f"{listing.area_m2:g} м²")
+        details.append(f"Площадь: {listing.area_m2:g} м²")
     if listing.floor is not None and listing.floors_total is not None:
-        details.append(f"{listing.floor}/{listing.floors_total} этаж")
+        details.append(f"Этаж: {listing.floor}/{listing.floors_total}")
     if details:
-        pieces.append(" | ".join(details))
+        pieces.extend(details)
     if listing.address:
-        pieces.append(listing.address)
+        pieces.append(f"Адрес: {listing.address}")
+    if listing.contact_name:
+        pieces.append(f"Контакт: {listing.contact_name}")
     pieces.append(listing.url)
     return "\n".join(pieces)
 
 
 def format_listing_full(listing: Listing) -> str:
-    lines = [listing.title, listing.price_label]
+    lines = [listing.title, f"Цена: {listing.price_label}"]
     if listing.address:
         lines.append(f"Адрес: {listing.address}")
+    overview: list[str] = []
     if listing.rooms is not None:
-        lines.append(f"Комнаты: {listing.rooms}")
+        overview.append(f"Комнаты: {listing.rooms}")
     if listing.area_m2 is not None:
-        lines.append(f"Площадь: {listing.area_m2:g} м²")
+        overview.append(f"Площадь: {listing.area_m2:g} м²")
     if listing.floor is not None and listing.floors_total is not None:
-        lines.append(f"Этаж: {listing.floor}/{listing.floors_total}")
+        overview.append(f"Этаж: {listing.floor}/{listing.floors_total}")
+    if overview:
+        lines.append("Характеристики:")
+        for item in overview:
+            lines.append(f"- {item}")
     if listing.district:
         lines.append(f"Район: {listing.district}")
     if listing.metro:
@@ -54,6 +62,7 @@ def format_listing_full(listing: Listing) -> str:
         lines.append(f"Дата: {listing.published_at}")
     if listing.description:
         lines.append("")
+        lines.append("Описание:")
         lines.append(listing.description[:1800])
     if listing.attributes:
         for key, value in listing.attributes.items():
@@ -68,6 +77,7 @@ def format_listing_full(listing: Listing) -> str:
             else:
                 lines.append(f"- {value}")
     lines.append("")
+    lines.append("Ссылка:")
     lines.append(listing.url)
     return "\n".join(lines)
 

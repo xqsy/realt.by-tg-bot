@@ -62,7 +62,7 @@ class RealtParser:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def search(self, prefs: UserPreferences, limit: int = 10) -> SearchResult:
+    async def search(self, prefs: UserPreferences, limit: int | None = None) -> SearchResult:
         city_label, base_url = CITY_URLS[prefs.city_key]
         listings: list[Listing] = []
         seen_ids: set[str] = set()
@@ -78,7 +78,7 @@ class RealtParser:
                 seen_ids.add(listing.listing_id)
                 detailed = await self._enrich_listing(listing)
                 listings.append(detailed)
-                if len(listings) >= limit:
+                if limit is not None and len(listings) >= limit:
                     return SearchResult(items=listings, source_url=page_url)
         return SearchResult(items=listings, source_url=base_url)
 

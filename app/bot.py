@@ -15,7 +15,6 @@ from app.storage import UserPreferencesRepository
 settings = load_settings()
 repository = UserPreferencesRepository(settings.data_dir / "users.sqlite3")
 parser = RealtParser(settings)
-SEARCH_FETCH_LIMIT = 20
 
 
 async def _send_long_message(target_message, text: str, reply_markup=None) -> None:
@@ -181,7 +180,7 @@ async def _perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     city_label = _city_label(prefs.city_key)
     waiting_message = await message.reply_text(f"Ищу объявления: {city_label}...")
     try:
-        result = await parser.search(prefs, limit=SEARCH_FETCH_LIMIT)
+        result = await parser.search(prefs)
     except Exception as exc:
         logging.exception("Search failed", exc_info=exc)
         await waiting_message.edit_text("Не удалось получить объявления с realt.by. Попробуйте позже.")
@@ -199,7 +198,7 @@ async def _perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data["search_results"] = result.items
     context.user_data["search_city_label"] = city_label
     context.user_data["search_index"] = 0
-    await _send_search_item(message, context, prefs)
+    await _send_search_item(message, context)
 
 
 async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, step: int) -> None:
@@ -221,11 +220,11 @@ async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     if update.effective_user is None:
         await query.message.reply_text("Не удалось получить параметры поиска.", reply_markup=main_menu_keyboard())
         return
-    prefs = repository.get(update.effective_user.id)
-    await _send_search_item(query.message, context, prefs)
+    repository.get(update.effective_user.id)
+    await _send_search_item(query.message, context)
 
 
-async def _send_search_item(target_message, context: ContextTypes.DEFAULT_TYPE, prefs) -> None:
+async def _send_search_item(target_message, context: ContextTypes.DEFAULT_TYPE) -> None:
     results = context.user_data.get("search_results")
     city_label = context.user_data.get("search_city_label")
     index = context.user_data.get("search_index", 0)
@@ -239,8 +238,6 @@ async def _send_search_item(target_message, context: ContextTypes.DEFAULT_TYPE, 
     message_lines = [
         f"Объявление {index + 1} из {len(results)}",
         f"Город: {city_label}",
-        "",
-        format_preferences(prefs, city_label),
         "",
         format_listing_full(item),
     ]

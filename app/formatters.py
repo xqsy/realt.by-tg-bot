@@ -3,7 +3,12 @@ from __future__ import annotations
 from app.models import Listing, UserPreferences
 
 HIDDEN_ATTRIBUTE_SECTIONS = {"Местоположение"}
-HIDDEN_ATTRIBUTE_KEYS = {"furniture"}
+HIDDEN_ATTRIBUTE_KEYS = {"furniture", "мебель"}
+
+
+def _normalize_attribute_key(value: object) -> str:
+    return str(value).strip().lower()
+
 
 def format_preferences(prefs: UserPreferences, city_label: str) -> str:
     min_price = str(prefs.min_price) if prefs.min_price is not None else "не задана"
@@ -68,19 +73,20 @@ def format_listing_full(listing: Listing) -> str:
         for key, value in listing.attributes.items():
             if key in HIDDEN_ATTRIBUTE_SECTIONS:
                 continue
+            normalized_key = _normalize_attribute_key(key)
+            if normalized_key in HIDDEN_ATTRIBUTE_KEYS:
+                continue
             lines.append("")
             lines.append(f"{key}:")
             if isinstance(value, dict):
                 for nested_key, nested_value in value.items():
-                    if nested_key in HIDDEN_ATTRIBUTE_KEYS:
+                    if _normalize_attribute_key(nested_key) in HIDDEN_ATTRIBUTE_KEYS:
                         continue
                     lines.append(f"- {nested_key}: {nested_value}")
             elif isinstance(value, list):
                 for item in value:
                     lines.append(f"- {item}")
             else:
-                if key in HIDDEN_ATTRIBUTE_KEYS:
-                    continue
                 lines.append(f"- {value}")
     lines.append("")
     lines.append("Ссылка:")

@@ -57,3 +57,4 @@ class SearchPageResult:
     page: int
     source_url: str
     had_candidates: bool
+    had_unseen_candidates: bool

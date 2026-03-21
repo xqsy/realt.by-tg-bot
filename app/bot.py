@@ -72,7 +72,7 @@ async def _load_next_search_page(context: ContextTypes.DEFAULT_TYPE, prefs) -> b
         if page_result.items:
             results.extend(page_result.items)
             return True
-        if not page_result.had_candidates:
+        if not page_result.had_candidates or not page_result.had_unseen_candidates:
             state["exhausted"] = True
             return False
         next_page += 1
@@ -345,12 +345,18 @@ async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         prefs = repository.get(update.effective_user.id)
         if prefs.city_key != city_key:
             prefs.city_key = city_key
+        loading_message = await query.message.reply_text("Идет поиск...")
         try:
             loaded = await _load_next_search_page(context, prefs)
         except Exception as exc:
             logging.exception("Failed to load next search page", exc_info=exc)
             await query.message.reply_text("Не удалось загрузить следующую страницу объявлений.", reply_markup=main_menu_keyboard())
             return
+        finally:
+            try:
+                await loading_message.delete()
+            except BadRequest:
+                pass
         state = _get_search_state(context)
         results = state.get("results") if state is not None else None
         analysis = _get_query_analysis(context)

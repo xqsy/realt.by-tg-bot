@@ -101,9 +101,11 @@ class RealtParser:
         page_listings = self._extract_listings_from_page(html, base_url, city_label)
         collected: list[Listing] = []
         seen = seen_ids if seen_ids is not None else set()
+        had_unseen_candidates = False
         for listing in page_listings:
             if listing.listing_id in seen:
                 continue
+            had_unseen_candidates = True
             if not self._match_filters(listing, prefs):
                 continue
             seen.add(listing.listing_id)
@@ -114,6 +116,7 @@ class RealtParser:
             page=page,
             source_url=page_url,
             had_candidates=bool(page_listings),
+            had_unseen_candidates=had_unseen_candidates,
         )
 
     async def _fetch(self, url: str) -> str:

@@ -56,10 +56,17 @@ def format_listing_full(listing: Listing) -> str:
         lines.append("")
         lines.append(listing.description[:1800])
     if listing.attributes:
-        lines.append("")
-        lines.append("Доп. параметры:")
         for key, value in listing.attributes.items():
-            lines.append(f"- {key}: {value}")
+            lines.append("")
+            lines.append(f"{key}:")
+            if isinstance(value, dict):
+                for nested_key, nested_value in value.items():
+                    lines.append(f"- {nested_key}: {nested_value}")
+            elif isinstance(value, list):
+                for item in value:
+                    lines.append(f"- {item}")
+            else:
+                lines.append(f"- {value}")
     lines.append("")
     lines.append(listing.url)
     return "\n".join(lines)

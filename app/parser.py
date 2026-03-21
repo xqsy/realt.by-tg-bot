@@ -12,12 +12,39 @@ from dataclasses import replace
 from app.config import CITY_URLS, Settings
 from app.models import Listing, SearchResult, UserPreferences
 
-PRICE_RE = re.compile(r"(\d[\d\s]{1,15})\s*р\./мес\.", re.IGNORECASE)
-USD_RE = re.compile(r"≈\s*(\d[\d\s]{1,10})\s*\$/мес\.", re.IGNORECASE)
+PRICE_RE = re.compile(r"(\d[\d \xa0]{0,15})\s*р\./мес\.", re.IGNORECASE)
+USD_RE = re.compile(r"≈\s*(\d[\d \xa0]{0,10})\s*\$/мес\.", re.IGNORECASE)
+PRICE_BLOCK_RE = re.compile(r"(\d[\d \xa0]{0,15})\s*р\./мес\.(?:\s*≈\s*(\d[\d \xa0]{0,10})\s*\$/мес\.)?", re.IGNORECASE)
 ROOMS_RE = re.compile(r"(\d+)\s*комн", re.IGNORECASE)
 AREA_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*м²", re.IGNORECASE)
 FLOOR_RE = re.compile(r"(\d+)\s*/\s*(\d+)\s*этаж", re.IGNORECASE)
 PHONE_RE = re.compile(r"\+?\d[\d\s()\-]{7,}\d")
+DETAIL_PATH_RE = re.compile(r"^/(?:[a-z-]+-region/)?rent-flat-for-long/object/(\d+)/?$", re.IGNORECASE)
+SECTION_HEADERS = ["Параметры объекта", "Удобства", "Примечание", "Арендодатель", "Местоположение"]
+IGNORED_SECTION_LINES = {"Показать больше", "Скрыть", "Написать", "Показать контакты", "Контактное лицо"}
+PARAMETER_LABELS = [
+    "Количество комнат",
+    "Раздельных комнат",
+    "Площадь общая",
+    "Площадь жилая",
+    "Площадь кухни",
+    "Этаж / этажность",
+    "Тип дома",
+    "Ремонт",
+    "Мебель",
+    "Санузел",
+    "Квартплата",
+    "Срок аренды",
+]
+LOCATION_LABELS = [
+    "Область",
+    "Район",
+    "Населенный пункт",
+    "Улица",
+    "Номер дома",
+    "Район города",
+    "Координаты",
+]
 
 
 class RealtParser:
@@ -75,7 +102,9 @@ class RealtParser:
             raw = script.string or script.get_text("", strip=True)
             if not raw:
                 continue
-            json_payloads = self._extract_json_payloads(raw)
+            script_id = script.get("id")
+            script_type = script.get("type")
+            json_payloads = self._extract_json_payloads(raw, script_id=script_id, script_type=script_type)
             for payload in json_payloads:
                 for item in self._walk(payload):
                     if not isinstance(item, dict):
@@ -85,18 +114,12 @@ class RealtParser:
                         listings.append(normalized)
         return listings
 
-    def _extract_json_payloads(self, raw: str) -> list[object]:
+    def _extract_json_payloads(self, raw: str, script_id: str | None = None, script_type: str | None = None) -> list[object]:
         payloads: list[object] = []
         stripped = raw.strip()
-        if stripped.startswith("{") or stripped.startswith("["):
+        if script_id == "__NEXT_DATA__" or script_type == "application/ld+json" or stripped.startswith("{") or stripped.startswith("["):
             try:
                 payloads.append(json.loads(stripped))
-            except json.JSONDecodeError:
-                pass
-        next_data_match = re.search(r"<script[^>]*id=[\"']__NEXT_DATA__[\"'][^>]*>(.*?)</script>", raw, re.DOTALL)
-        if next_data_match:
-            try:
-                payloads.append(json.loads(next_data_match.group(1).strip()))
             except json.JSONDecodeError:
                 pass
         return payloads
@@ -187,11 +210,14 @@ class RealtParser:
             html = await self._fetch(listing.url)
         except httpx.HTTPError:
             return listing
+        detail_listing = self._extract_listing_from_detail_page(html, listing.url, listing.city_label)
         detail_candidates = self._extract_listings_from_json(html, listing.city_label)
         for candidate in detail_candidates:
             if candidate.url == listing.url or candidate.listing_id == listing.listing_id:
-                return self._merge_listings(listing, candidate)
-        return self._merge_with_detail_text(listing, html)
+                merged = self._merge_listings(listing, candidate)
+                return self._merge_listings(merged, detail_listing)
+        merged = self._merge_with_detail_text(listing, html)
+        return self._merge_listings(merged, detail_listing)
 
     def _merge_with_detail_text(self, listing: Listing, html: str) -> Listing:
         soup = BeautifulSoup(html, "html.parser")
@@ -275,19 +301,215 @@ class RealtParser:
         if parsed.netloc and "realt.by" not in parsed.netloc:
             return False
         path = parsed.path.rstrip("/")
-        if not path.startswith("/rent/flat-for-long") and not path.startswith("/brest-region/rent/flat-for-long") and not path.startswith("/mogilev-region/rent/flat-for-long") and not path.startswith("/gomel-region/rent/flat-for-long") and not path.startswith("/grodno-region/rent/flat-for-long") and not path.startswith("/vitebsk-region/rent/flat-for-long"):
-            return False
-        blocked = ("/map", "/1k", "/2k", "/3k", "/4k", "bez-posrednikov", "new-builds", "/page-")
-        if any(token in path for token in blocked):
-            return False
-        segments = [part for part in path.split("/") if part]
-        if len(segments) < 4:
-            return False
-        if segments[-1] in {"flat-for-long", "rent"}:
-            return False
-        if re.fullmatch(r"[a-z0-9\-]+", segments[-1]) is None:
-            return False
-        return True
+        return DETAIL_PATH_RE.fullmatch(path) is not None
+
+    def _extract_listing_from_detail_page(self, html: str, url: str, city_label: str) -> Listing:
+        soup = BeautifulSoup(html, "html.parser")
+        page_text = soup.get_text("\n", strip=True)
+        detail_object = self._extract_next_data_object(soup)
+        price_byn, price_usd = self._extract_price_pair(page_text)
+        title = self._extract_page_title(soup) or "Объявление без названия"
+        parameter_lines = self._extract_section_lines(page_text, "Параметры объекта")
+        location_lines = self._extract_section_lines(page_text, "Местоположение")
+        landlord_lines = self._extract_section_lines(page_text, "Арендодатель")
+        note_lines = self._extract_section_lines(page_text, "Примечание")
+        parameters = self._parse_labeled_section(parameter_lines, PARAMETER_LABELS)
+        amenities = self._extract_section_values(page_text, "Удобства")
+        location = self._parse_labeled_section(location_lines, LOCATION_LABELS)
+        address = self._build_address_from_location(location) or self._extract_address_from_title(title)
+        district = self._first_non_empty(location.get("Район города"), location.get("Район"))
+        rooms = self._clean_int(parameters.get("Количество комнат", "")) if parameters else None
+        area_m2 = self._extract_float({"value": parameters.get("Площадь общая")} if parameters else {}, ["value"])
+        floor, floors_total = self._parse_floor_pair(parameters.get("Этаж / этажность")) if parameters else (None, None)
+        attributes: dict[str, object] = {}
+        if parameters:
+            attributes["Параметры объекта"] = parameters
+        if amenities:
+            attributes["Удобства"] = amenities
+        if location:
+            attributes["Местоположение"] = location
+        return Listing(
+            listing_id=self._make_listing_id(url=url, title=title, address=address),
+            url=url,
+            title=title,
+            city_label=city_label,
+            price_byn=price_byn,
+            price_usd=price_usd,
+            rooms=rooms,
+            area_m2=area_m2,
+            floor=floor,
+            floors_total=floors_total,
+            address=address,
+            district=district,
+            description=self._join_section_lines(note_lines),
+            phone_numbers=self._extract_detail_phone_numbers(detail_object) or self._extract_phone_numbers_from_lines(landlord_lines),
+            contact_name=self._extract_contact_name_from_lines(landlord_lines),
+            attributes=attributes,
+        )
+
+    def _extract_page_title(self, soup: BeautifulSoup) -> str | None:
+        heading = soup.find(["h1", "title"])
+        if heading is None:
+            return None
+        text = " ".join(heading.stripped_strings)
+        if not text:
+            return None
+        text = text.split(" | ", 1)[0].strip()
+        text = re.sub(r"\s+id\d+\s*$", "", text, flags=re.IGNORECASE)
+        return text.strip()
+
+    def _extract_section_lines(self, text: str, section_header: str) -> list[str]:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        section_lines: list[str] = []
+        in_section = False
+        for line in lines:
+            if line == section_header:
+                in_section = True
+                continue
+            if in_section and line in SECTION_HEADERS:
+                break
+            if in_section:
+                section_lines.append(line)
+        return section_lines
+
+    def _extract_section_values(self, text: str, section_header: str) -> list[str]:
+        values: list[str] = []
+        for line in self._extract_section_lines(text, section_header):
+            cleaned = line.lstrip("- ").strip()
+            if not cleaned or cleaned in IGNORED_SECTION_LINES:
+                continue
+            if cleaned not in values:
+                values.append(cleaned)
+        return values
+
+    def _parse_labeled_section(self, lines: list[str], labels: list[str]) -> dict[str, str]:
+        block = "\n".join(lines)
+        result: dict[str, str] = {}
+        if not block:
+            return result
+        escaped_labels = "|".join(re.escape(label) for label in labels)
+        for label in labels:
+            match = re.search(rf"{re.escape(label)}\s*[:\-]?\s*(.+?)(?=\n(?:{escaped_labels})\s*[:\-]?|\Z)", block, re.S)
+            if not match:
+                continue
+            value = self._clean_section_value(match.group(1))
+            if value:
+                result[label] = value
+        return result
+
+    def _clean_section_value(self, value: str) -> str | None:
+        lines = [line.strip(" -") for line in value.splitlines() if line.strip()]
+        if not lines:
+            return None
+        return lines[0]
+
+    def _build_address_from_location(self, location: dict[str, str]) -> str | None:
+        parts = [location.get("Населенный пункт"), location.get("Улица"), location.get("Номер дома")]
+        normalized = [part for part in parts if part]
+        return ", ".join(normalized) if normalized else None
+
+    def _extract_address_from_title(self, title: str) -> str | None:
+        parts = [part.strip() for part in title.split(",")]
+        if len(parts) < 3:
+            return None
+        return ", ".join(parts[1:]).strip()
+
+    def _extract_contact_name_from_lines(self, lines: list[str]) -> str | None:
+        for line in lines:
+            if line in {"Контактное лицо", "Арендодатель"} or line in IGNORED_SECTION_LINES:
+                continue
+            if PHONE_RE.search(line):
+                continue
+            if len(line.split()) <= 5:
+                return line
+        return None
+
+    def _extract_phone_numbers_from_lines(self, lines: list[str]) -> list[str]:
+        numbers: list[str] = []
+        for line in lines:
+            if line in IGNORED_SECTION_LINES:
+                continue
+            for phone in PHONE_RE.findall(line):
+                normalized = self._normalize_phone(phone)
+                if normalized and normalized not in numbers:
+                    numbers.append(normalized)
+        return numbers
+
+    def _extract_next_data_object(self, soup: BeautifulSoup) -> dict[str, object] | None:
+        script = soup.find("script", id="__NEXT_DATA__")
+        if script is None:
+            return None
+        raw = script.string or script.get_text("", strip=True)
+        if not raw:
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        props = payload.get("props")
+        if not isinstance(props, dict):
+            return None
+        page_props = props.get("pageProps")
+        if not isinstance(page_props, dict):
+            return None
+        detail_object = page_props.get("object")
+        return detail_object if isinstance(detail_object, dict) else None
+
+    def _extract_detail_phone_numbers(self, detail_object: dict[str, object] | None) -> list[str]:
+        if not isinstance(detail_object, dict):
+            return []
+        value = detail_object.get("contactPhones")
+        numbers: list[str] = []
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str):
+                    normalized = self._normalize_phone(item)
+                    if normalized and normalized not in numbers:
+                        numbers.append(normalized)
+        elif isinstance(value, str):
+            normalized = self._normalize_phone(value)
+            if normalized:
+                numbers.append(normalized)
+        return numbers
+
+    def _extract_price_pair(self, text: str) -> tuple[int | None, int | None]:
+        match = PRICE_BLOCK_RE.search(text)
+        if not match:
+            return self._extract_price_byn(text), self._extract_price_usd(text)
+        price_byn = self._clean_int(match.group(1))
+        price_usd = self._clean_int(match.group(2)) if match.group(2) else None
+        return price_byn, price_usd
+
+    def _extract_price_byn(self, text: str) -> int | None:
+        match = PRICE_BLOCK_RE.search(text)
+        if match:
+            return self._clean_int(match.group(1))
+        match = PRICE_RE.search(text)
+        return self._clean_int(match.group(1)) if match else None
+
+    def _extract_price_usd(self, text: str) -> int | None:
+        match = USD_RE.search(text)
+        return self._clean_int(match.group(1)) if match else None
+
+    def _parse_floor_pair(self, value: str | None) -> tuple[int | None, int | None]:
+        if not value:
+            return None, None
+        match = re.search(r"(\d+)\s*/\s*(\d+)", value)
+        if not match:
+            return None, None
+        return int(match.group(1)), int(match.group(2))
+
+    def _join_section_lines(self, lines: list[str]) -> str | None:
+        cleaned = [line for line in lines if line not in SECTION_HEADERS and line not in IGNORED_SECTION_LINES]
+        if not cleaned:
+            return None
+        return " ".join(cleaned)[:1800]
+
+    def _first_non_empty(self, *values: str | None) -> str | None:
+        for value in values:
+            if value:
+                return value
+        return None
 
     def _extract_str(self, data: dict[str, object], keys: list[str]) -> str | None:
         for key in keys:
@@ -342,23 +564,32 @@ class RealtParser:
     def _extract_phone_list(self, data: dict[str, object]) -> list[str]:
         results: set[str] = set()
         for key, value in data.items():
-            if "phone" not in key.lower() and "contact" not in key.lower():
-                continue
-            if isinstance(value, str):
-                for phone in PHONE_RE.findall(value):
-                    normalized = self._normalize_phone(phone)
+            key_lower = key.lower()
+            if "phone" in key_lower:
+                if isinstance(value, str):
+                    normalized = self._normalize_phone(value)
                     if normalized:
                         results.add(normalized)
-            elif isinstance(value, list):
-                for item in value:
-                    if isinstance(item, str):
-                        normalized = self._normalize_phone(item)
+                    for phone in PHONE_RE.findall(value):
+                        normalized = self._normalize_phone(phone)
                         if normalized:
                             results.add(normalized)
-                    elif isinstance(item, dict):
-                        nested = self._extract_phone_list(item)
-                        results.update(nested)
-            elif isinstance(value, dict):
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, str):
+                            normalized = self._normalize_phone(item)
+                            if normalized:
+                                results.add(normalized)
+                            for phone in PHONE_RE.findall(item):
+                                normalized = self._normalize_phone(phone)
+                                if normalized:
+                                    results.add(normalized)
+                        elif isinstance(item, dict):
+                            results.update(self._extract_phone_list(item))
+                elif isinstance(value, dict):
+                    results.update(self._extract_phone_list(value))
+                continue
+            if key_lower in {"contact", "agent", "owner", "seller"} and isinstance(value, dict):
                 results.update(self._extract_phone_list(value))
         return sorted(results)
 
@@ -366,7 +597,7 @@ class RealtParser:
         urls: set[str] = set()
         for key, value in data.items():
             key_lower = key.lower()
-            if isinstance(value, str) and value.startswith("http") and any(token in key_lower for token in ("photo", "image", "img")):
+            if isinstance(value, str) and value.startswith("http") and any(token in key_lower for token in ("photo", "image", "img", "slide")):
                 urls.add(value)
             elif isinstance(value, list):
                 for item in value:
@@ -407,6 +638,11 @@ class RealtParser:
         return ", ".join(parts) if parts else None
 
     def _make_listing_id(self, url: str | None, title: str | None, address: str | None) -> str:
+        if url:
+            parsed = urlparse(url)
+            match = DETAIL_PATH_RE.fullmatch(parsed.path.rstrip("/"))
+            if match:
+                return match.group(1)
         base = url or title or address or "listing"
         return re.sub(r"[^a-zA-Z0-9]+", "-", base).strip("-").lower()[:80] or "listing"
 

@@ -136,7 +136,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         repository.save(prefs)
         _clear_search_state(context)
         await query.edit_message_text(
-            f"Город установлен: {_city_label(city_key)}\n\nИспользуйте меню ниже.",
+            format_preferences(prefs, _city_label(city_key)),
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -158,7 +158,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         prefs.rooms = None
         repository.save(prefs)
         _clear_search_state(context)
-        await query.message.reply_text("Фильтры сброшены.", reply_markup=main_menu_keyboard())
+        await query.message.reply_text(
+            format_preferences(prefs, _city_label(prefs.city_key)),
+            reply_markup=main_menu_keyboard(),
+        )
         return
     if data == "search:menu":
         await query.message.reply_text("Возврат в меню.", reply_markup=main_menu_keyboard())
@@ -185,7 +188,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         prefs.max_price = None
         repository.save(prefs)
         _clear_search_state(context)
-        await query.message.reply_text("Фильтр по цене очищен.", reply_markup=main_menu_keyboard())
+        await query.message.reply_text(
+            format_preferences(prefs, _city_label(prefs.city_key)),
+            reply_markup=main_menu_keyboard(),
+        )
         return
     if data == "filter:back":
         try:
@@ -198,7 +204,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         prefs.rooms = None if value == "any" else int(value)
         repository.save(prefs)
         _clear_search_state(context)
-        await query.message.reply_text("Фильтр по комнатам обновлён.", reply_markup=main_menu_keyboard())
+        await query.message.reply_text(
+            format_preferences(prefs, _city_label(prefs.city_key)),
+            reply_markup=main_menu_keyboard(),
+        )
         return
 
 
@@ -216,14 +225,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         prefs = repository.get(update.effective_user.id)
         if pending_filter == "min_price":
             prefs.min_price = value
-            answer = "Минимальная цена сохранена."
         else:
             prefs.max_price = value
-            answer = "Максимальная цена сохранена."
         repository.save(prefs)
         _clear_search_state(context)
         context.user_data.pop("pending_filter", None)
-        await update.message.reply_text(answer, reply_markup=main_menu_keyboard())
+        await update.message.reply_text(
+            format_preferences(prefs, _city_label(prefs.city_key)),
+            reply_markup=main_menu_keyboard(),
+        )
         return
     lowered = update.message.text.lower().strip()
     if lowered in {"город", "сменить город"}:

@@ -135,22 +135,30 @@ class RealtParser:
 
     def _normalize_listing_dict(self, data: dict[str, object], city_label: str) -> Listing | None:
         url = self._extract_str(data, ["url", "href", "link", "fullUrl"])
-        title = self._extract_str(data, ["title", "name", "header"])
-        description = self._extract_str(data, ["description", "text", "body"])
-        address = self._extract_address(data)
+        title = self._extract_str(data, ["title", "name", "header", "headline"])
+        description = self._extract_str(data, ["description", "text", "body", "headline"])
+        address = self._extract_address(data) or self._build_listing_address(data)
         price_byn = self._extract_int(data, ["price", "priceByn", "priceBYN", "priceValue"])
         price_usd = self._extract_int(data, ["priceUsd", "priceUSD"])
         rooms = self._extract_int(data, ["rooms", "roomCount"])
         area_m2 = self._extract_float(data, ["area", "areaTotal", "totalArea"])
-        listing_id = self._extract_str(data, ["id", "objectId", "uuid", "code"])
+        code_value = data.get("code")
+        numeric_code: str | None = None
+        if isinstance(code_value, int):
+            numeric_code = str(code_value)
+        elif isinstance(code_value, str) and code_value.strip().isdigit():
+            numeric_code = code_value.strip()
+        listing_id = numeric_code or self._extract_str(data, ["id", "objectId", "uuid", "code"])
         phone_numbers = self._extract_phone_list(data)
         photo_urls = self._extract_photo_urls(data)
         metro = self._extract_str(data, ["metro", "subway"])
-        district = self._extract_str(data, ["district", "microdistrict"])
+        district = self._extract_str(data, ["district", "microdistrict", "stateDistrictName", "townDistrictName"])
         contact_name = self._extract_contact_name(data)
         published_at = self._extract_str(data, ["publishedAt", "createdAt", "created"])
-        floor = self._extract_int(data, ["floor"])
-        floors_total = self._extract_int(data, ["floors", "floorTotal", "floorsTotal"])
+        floor = self._extract_int(data, ["floor", "storey"])
+        floors_total = self._extract_int(data, ["floors", "floorTotal", "floorsTotal", "storeys"])
+        if not url and numeric_code:
+            url = self._build_detail_url(data, numeric_code)
         if not (url or title or address):
             return None
         if url and not url.startswith("http"):
@@ -560,6 +568,43 @@ class RealtParser:
             if pieces:
                 return ", ".join(pieces)
         return None
+
+    def _build_listing_address(self, data: dict[str, object]) -> str | None:
+        parts: list[str] = []
+        town_name = data.get("townName")
+        if isinstance(town_name, str) and town_name.strip():
+            parts.append(f"г. {town_name.strip()}")
+        street_name = data.get("streetName")
+        if isinstance(street_name, str) and street_name.strip():
+            street = street_name.strip()
+            house_number = data.get("houseNumber")
+            if house_number is not None and str(house_number).strip():
+                street = f"{street}, {str(house_number).strip()}"
+            parts.append(street)
+        if not parts:
+            return None
+        return ", ".join(parts)
+
+    def _build_detail_url(self, data: dict[str, object], listing_id: str) -> str:
+        region_slug = self._extract_str(data, ["regionSlug"])
+        if not region_slug:
+            region_url = self._extract_str(data, ["stateRegionUrl"])
+            if region_url:
+                match = re.match(r"/([a-z-]+-region)/", region_url)
+                if match:
+                    region_slug = match.group(1)
+        if not region_slug:
+            region_name = self._extract_str(data, ["stateRegionName"])
+            region_map = {
+                "Минск": "minsk",
+                "Брестская область": "brest-region",
+                "Могилевская область": "mogilev-region",
+                "Гомельская область": "gomel-region",
+                "Гродненская область": "grodno-region",
+                "Витебская область": "vitebsk-region",
+            }
+            region_slug = region_map.get(region_name or "", "minsk")
+        return f"https://realt.by/{region_slug}/rent-flat-for-long/object/{listing_id}/"
 
     def _extract_phone_list(self, data: dict[str, object]) -> list[str]:
         results: set[str] = set()

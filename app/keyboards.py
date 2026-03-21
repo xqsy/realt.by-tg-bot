@@ -26,8 +26,10 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Настроить фильтры", callback_data="menu:filters"),
             ],
             [
-                InlineKeyboardButton(text="Показать объявления", callback_data="menu:search"),
                 InlineKeyboardButton(text="Сбросить фильтры", callback_data="menu:reset"),
+            ],
+            [
+                InlineKeyboardButton(text="Показать объявления", callback_data="menu:search"),
             ],
         ]
     )

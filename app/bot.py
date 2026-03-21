@@ -120,7 +120,10 @@ async def reset_command_handler(update: Update, context: ContextTypes.DEFAULT_TY
     prefs.max_price = None
     prefs.rooms = None
     repository.save(prefs)
-    await update.message.reply_text("Фильтры сброшены.", reply_markup=main_menu_keyboard())
+    await update.message.reply_text(
+        format_preferences(prefs, _city_label(prefs.city_key)),
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -164,7 +167,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
     if data == "search:menu":
-        await query.message.reply_text("Возврат в меню.", reply_markup=main_menu_keyboard())
+        await query.message.reply_text(
+            format_preferences(prefs, _city_label(prefs.city_key)),
+            reply_markup=main_menu_keyboard(),
+        )
         return
     if data == "search:next":
         await _show_search_item(update, context, step=1)

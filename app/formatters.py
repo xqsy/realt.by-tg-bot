@@ -19,7 +19,8 @@ def format_preferences(prefs: UserPreferences, city_label: str) -> str:
         f"Город: {city_label}\n"
         f"Цена от: {min_price}\n"
         f"Цена до: {max_price}\n"
-        f"Комнаты: {rooms}"
+        f"Комнаты: {rooms}\n\n"
+        "Можно также написать запрос в свободной форме для ИИ-поиска, например: двушка в Минске до 1200 рядом с метро"
     )
 
 

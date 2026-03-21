@@ -3,63 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import httpx
 
 from app.config import CITY_URLS, Settings
 from app.models import Listing, UserPreferences
-
-ROOM_ALIASES = {
-    "студ": 1,
-    "одн": 1,
-    "1к": 1,
-    "1-ком": 1,
-    "2к": 2,
-    "2-ком": 2,
-    "двуш": 2,
-    "двух": 2,
-    "3к": 3,
-    "3-ком": 3,
-    "треш": 3,
-    "трех": 3,
-    "4к": 4,
-    "4-ком": 4,
-    "четырех": 4,
-}
-STOPWORDS = {
-    "ищу",
-    "нужна",
-    "нужно",
-    "нужен",
-    "квартира",
-    "квартиру",
-    "аренда",
-    "снять",
-    "долгосрочно",
-    "длительно",
-    "долгий",
-    "срок",
-    "в",
-    "во",
-    "на",
-    "по",
-    "до",
-    "от",
-    "и",
-    "или",
-    "не",
-    "но",
-    "около",
-    "рядом",
-    "желательно",
-    "желателен",
-    "хочу",
-    "мне",
-    "для",
-    "без",
-    "чтобы",
-}
 
 
 @dataclass(slots=True)
@@ -69,14 +18,12 @@ class QueryAnalysis:
     min_price: int | None = None
     max_price: int | None = None
     rooms: int | None = None
-    features: list[str] = field(default_factory=list)
+    features: list[str] | None = None
     summary: str = ""
-    source: str = "heuristic"
+    ai_available: bool = True
 
     def has_updates(self) -> bool:
-        return any(
-            value is not None for value in (self.city_key, self.min_price, self.max_price, self.rooms)
-        ) or bool(self.features)
+        return any(value is not None for value in (self.city_key, self.min_price, self.max_price, self.rooms)) or bool(self.features)
 
 
 class HousingQueryAnalyzer:
@@ -84,15 +31,13 @@ class HousingQueryAnalyzer:
         self._settings = settings
 
     async def analyze(self, query: str, current_prefs: UserPreferences) -> QueryAnalysis:
-        heuristic = self._heuristic_parse(query, current_prefs)
         if not self._settings.ai_api_key or not self._settings.ai_model:
-            return heuristic
+            return QueryAnalysis(original_query=query, ai_available=False)
         try:
-            remote = await self._remote_parse(query, current_prefs)
+            return await self._remote_parse(query, current_prefs)
         except Exception as exc:
             logging.warning("AI query analysis fallback triggered: %s", exc)
-            return heuristic
-        return self._merge_with_heuristic(remote, heuristic)
+            return QueryAnalysis(original_query=query, ai_available=False)
 
     def rank_listings(self, listings: list[Listing], analysis: QueryAnalysis, prefs: UserPreferences) -> list[Listing]:
         scored = sorted(
@@ -163,108 +108,12 @@ class HousingQueryAnalyzer:
             rooms=self._as_int(parsed.get("rooms")),
             features=[str(item).strip().lower() for item in features if str(item).strip()],
             summary=str(parsed.get("summary") or "").strip(),
-            source="api",
+            ai_available=True,
         )
-
-    def _heuristic_parse(self, query: str, current_prefs: UserPreferences) -> QueryAnalysis:
-        normalized = query.lower().replace("ё", "е")
-        city_key = self._extract_city_key(normalized)
-        min_price, max_price = self._extract_price_range(normalized)
-        rooms = self._extract_rooms(normalized)
-        features = self._extract_features(normalized)
-        parts: list[str] = []
-        effective_city_key = city_key or current_prefs.city_key
-        parts.append(f"город: {CITY_URLS[effective_city_key][0]}")
-        if min_price is not None or max_price is not None:
-            left = str(min_price) if min_price is not None else "без минимума"
-            right = str(max_price) if max_price is not None else "без максимума"
-            parts.append(f"цена: {left} - {right} BYN")
-        if rooms is not None:
-            parts.append(f"комнаты: {rooms}")
-        if features:
-            parts.append("пожелания: " + ", ".join(features[:5]))
-        return QueryAnalysis(
-            original_query=query,
-            city_key=city_key,
-            min_price=min_price,
-            max_price=max_price,
-            rooms=rooms,
-            features=features,
-            summary="; ".join(parts),
-            source="heuristic",
-        )
-
-    def _merge_with_heuristic(self, remote: QueryAnalysis, heuristic: QueryAnalysis) -> QueryAnalysis:
-        return QueryAnalysis(
-            original_query=remote.original_query,
-            city_key=remote.city_key or heuristic.city_key,
-            min_price=remote.min_price if remote.min_price is not None else heuristic.min_price,
-            max_price=remote.max_price if remote.max_price is not None else heuristic.max_price,
-            rooms=remote.rooms if remote.rooms is not None else heuristic.rooms,
-            features=remote.features or heuristic.features,
-            summary=remote.summary or heuristic.summary,
-            source=remote.source,
-        )
-
-    def _extract_city_key(self, normalized_query: str) -> str | None:
-        for city_key, (label, _) in CITY_URLS.items():
-            city_name = label.lower().replace("ё", "е")
-            if city_name in normalized_query:
-                return city_key
-        return None
-
-    def _extract_price_range(self, normalized_query: str) -> tuple[int | None, int | None]:
-        min_price = None
-        max_price = None
-        up_to_match = re.search(r"(?:до|не дороже|макс(?:имум)?)[^\d]{0,12}(\d{2,5})", normalized_query)
-        if up_to_match:
-            max_price = int(up_to_match.group(1))
-        from_match = re.search(r"(?:от|не дешевле|мин(?:имум)?)[^\d]{0,12}(\d{2,5})", normalized_query)
-        if from_match:
-            min_price = int(from_match.group(1))
-        between_match = re.search(r"(\d{2,5})\s*[-–]\s*(\d{2,5})", normalized_query)
-        if between_match:
-            left = int(between_match.group(1))
-            right = int(between_match.group(2))
-            min_price = min_price or min(left, right)
-            max_price = max_price or max(left, right)
-        if min_price is None and max_price is None:
-            standalone = [int(value) for value in re.findall(r"\b(\d{3,5})\b", normalized_query)]
-            plausible = [value for value in standalone if 100 <= value <= 10000]
-            if len(plausible) == 1:
-                max_price = plausible[0]
-        return min_price, max_price
-
-    def _extract_rooms(self, normalized_query: str) -> int | None:
-        explicit = re.search(r"\b([1-4])\s*[- ]?(?:комнат|комн|к)\b", normalized_query)
-        if explicit:
-            return int(explicit.group(1))
-        for alias, rooms in ROOM_ALIASES.items():
-            if alias in normalized_query:
-                return rooms
-        return None
-
-    def _extract_features(self, normalized_query: str) -> list[str]:
-        features: list[str] = []
-        for phrase in ["рядом с метро", "с метро", "центр", "без мебели", "с мебелью", "можно с животными", "с детьми"]:
-            if phrase in normalized_query:
-                features.append(phrase)
-        tokens = re.findall(r"[а-яa-z0-9]{3,}", normalized_query)
-        for token in tokens:
-            if token in STOPWORDS:
-                continue
-            if token in ROOM_ALIASES:
-                continue
-            if token.isdigit():
-                continue
-            if any(token == label.lower().replace("ё", "е") for label, _ in CITY_URLS.values()):
-                continue
-            if token not in features:
-                features.append(token)
-        return features[:8]
 
     def _score_listing(self, listing: Listing, analysis: QueryAnalysis, prefs: UserPreferences) -> float:
         score = 0.0
+        features = analysis.features or []
         target_rooms = analysis.rooms if analysis.rooms is not None else prefs.rooms
         if target_rooms is not None:
             if listing.rooms == target_rooms:
@@ -295,10 +144,10 @@ class HousingQueryAnalyzer:
                 " ".join(str(value) for value in listing.attributes.values()),
             ]
         )
-        for feature in analysis.features:
+        for feature in features:
             if feature and feature in haystack:
                 score += 2.0
-        if listing.metro and any("метро" in feature for feature in analysis.features):
+        if listing.metro and any("метро" in feature for feature in features):
             score += 1.0
         if listing.area_m2 is not None:
             score += min(listing.area_m2 / 100, 1.5)

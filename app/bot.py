@@ -231,6 +231,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     prefs = repository.get(update.effective_user.id)
     analysis = await query_analyzer.analyze(update.message.text, prefs)
+    if not analysis.ai_available:
+        await update.message.reply_text("ИИ-поиск временно недоступен. Попробуйте позже или используйте фильтры вручную.", reply_markup=main_menu_keyboard())
+        return
     if not analysis.has_updates():
         await update.message.reply_text(
             "Используйте кнопки меню или команды /start, /city, /filters, /search. Также можно написать запрос в свободной форме, например: двушка в Минске до 1200 рядом с метро.",
@@ -279,10 +282,7 @@ async def _perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except BadRequest:
         pass
     if analysis is not None and analysis.summary:
-        await message.reply_text(
-            f"ИИ-анализ запроса ({analysis.source}): {analysis.summary}",
-            reply_markup=main_menu_keyboard(),
-        )
+        await message.reply_text(analysis.summary, reply_markup=main_menu_keyboard())
     await _send_search_item(message, context)
 
 
@@ -387,7 +387,6 @@ def _format_analysis_result(prefs: UserPreferences, analysis: QueryAnalysis) -> 
     lines.append(f"Комнаты: {prefs.rooms if prefs.rooms is not None else 'любое количество'}")
     if analysis.features:
         lines.append("Пожелания: " + ", ".join(analysis.features))
-    lines.append(f"Источник анализа: {analysis.source}")
     return "\n".join(lines)
 
 

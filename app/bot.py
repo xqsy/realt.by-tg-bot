@@ -46,6 +46,7 @@ def _create_search_state(city_label: str, city_key: str) -> dict[str, object]:
         "next_page": 1,
         "seen_ids": set(),
         "exhausted": False,
+        "max_page": None,
     }
 
 
@@ -62,17 +63,26 @@ async def _load_next_search_page(context: ContextTypes.DEFAULT_TYPE, prefs) -> b
     seen_ids = state.get("seen_ids")
     next_page = state.get("next_page")
     exhausted = state.get("exhausted")
-    if not isinstance(results, list) or not isinstance(seen_ids, set) or not isinstance(next_page, int) or not isinstance(exhausted, bool):
+    max_page = state.get("max_page")
+    if not isinstance(results, list) or not isinstance(seen_ids, set) or not isinstance(next_page, int) or not isinstance(exhausted, bool) or (max_page is not None and not isinstance(max_page, int)):
         return False
     if exhausted:
         return False
+    if isinstance(max_page, int) and next_page > max_page:
+        state["exhausted"] = True
+        return False
     while True:
         page_result = await parser.search_page(prefs, page=next_page, seen_ids=seen_ids)
+        if isinstance(page_result.max_page, int):
+            state["max_page"] = page_result.max_page
         state["next_page"] = next_page + 1
         if page_result.items:
             results.extend(page_result.items)
             return True
         if not page_result.had_candidates or not page_result.had_unseen_candidates:
+            state["exhausted"] = True
+            return False
+        if isinstance(page_result.max_page, int) and next_page >= page_result.max_page:
             state["exhausted"] = True
             return False
         next_page += 1

@@ -58,3 +58,4 @@ class SearchPageResult:
     source_url: str
     had_candidates: bool
     had_unseen_candidates: bool
+    max_page: int | None = None

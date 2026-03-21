@@ -99,6 +99,7 @@ class RealtParser:
         page_url = base_url if page == 1 else f"{base_url}?page={page}"
         html = await self._fetch(page_url)
         page_listings = self._extract_listings_from_page(html, base_url, city_label)
+        max_page = self._extract_max_page(html)
         collected: list[Listing] = []
         seen = seen_ids if seen_ids is not None else set()
         had_unseen_candidates = False
@@ -106,10 +107,11 @@ class RealtParser:
             if listing.listing_id in seen:
                 continue
             had_unseen_candidates = True
-            if not self._match_filters(listing, prefs):
+            detailed = await self._enrich_listing(listing)
+            if not self._match_filters(detailed, prefs):
+                seen.add(listing.listing_id)
                 continue
             seen.add(listing.listing_id)
-            detailed = await self._enrich_listing(listing)
             collected.append(detailed)
         return SearchPageResult(
             items=collected,
@@ -117,6 +119,7 @@ class RealtParser:
             source_url=page_url,
             had_candidates=bool(page_listings),
             had_unseen_candidates=had_unseen_candidates,
+            max_page=max_page,
         )
 
     async def _fetch(self, url: str) -> str:
@@ -249,6 +252,20 @@ class RealtParser:
                 )
             )
         return listings
+
+    def _extract_max_page(self, html: str) -> int | None:
+        soup = BeautifulSoup(html, "html.parser")
+        page_numbers: list[int] = []
+        for anchor in soup.find_all("a", href=True):
+            href = anchor.get("href", "")
+            match = re.search(r"[?&]page=(\d+)", href)
+            if match:
+                page_numbers.append(int(match.group(1)))
+                continue
+            text = " ".join(anchor.stripped_strings)
+            if text.isdigit():
+                page_numbers.append(int(text))
+        return max(page_numbers) if page_numbers else 1
 
     async def _enrich_listing(self, listing: Listing) -> Listing:
         try:

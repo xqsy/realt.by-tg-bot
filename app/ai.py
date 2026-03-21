@@ -119,27 +119,32 @@ class HousingQueryAnalyzer:
                 "rooms": current_prefs.rooms,
             },
         }
+        request_payload = {
+            "model": self._settings.ai_model,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+            ],
+        }
+        if "openrouter.ai" in self._settings.ai_base_url:
+            request_payload["reasoning"] = {"enabled": True}
         async with httpx.AsyncClient(timeout=self._settings.request_timeout) as client:
             response = await client.post(
                 f"{self._settings.ai_base_url.rstrip('/')}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {self._settings.ai_api_key}",
                     "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com",
+                    "X-Title": "realt-bot",
                 },
-                json={
-                    "model": self._settings.ai_model,
-                    "temperature": 0,
-                    "response_format": {"type": "json_object"},
-                    "messages": [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-                    ],
-                },
+                json=request_payload,
             )
             response.raise_for_status()
         payload = response.json()
-        content = payload["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
+        content = str(payload["choices"][0]["message"].get("content") or "").strip()
+        parsed = self._parse_json_response(content)
         city_key = parsed.get("city_key")
         if city_key not in CITY_URLS:
             city_key = None
@@ -304,3 +309,18 @@ class HousingQueryAnalyzer:
             return int(str(value).strip())
         except (TypeError, ValueError):
             return None
+
+    def _parse_json_response(self, content: str) -> dict[str, object]:
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+        fenced_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, flags=re.DOTALL)
+        if fenced_match:
+            return json.loads(fenced_match.group(1))
+        object_match = re.search(r"(\{.*\})", content, flags=re.DOTALL)
+        if object_match:
+            return json.loads(object_match.group(1))
+        raise ValueError("AI response does not contain valid JSON")

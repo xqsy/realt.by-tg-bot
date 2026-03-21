@@ -83,7 +83,11 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     repository.get(update.effective_user.id)
     await update.message.reply_text(
-        "Выберите город для поиска квартир на длительный срок:",
+        "Я помогу подобрать квартиру в долгосрочную аренду.\n\n"
+        "Вы можете работать двумя способами:\n"
+        "- написать запрос в свободной форме, например: двушка в Минске до 1200 рядом с метро\n"
+        "- либо выбрать город и настроить фильтры вручную через кнопки\n\n"
+        "Сначала выберите город для поиска:",
         reply_markup=city_keyboard(),
     )
 

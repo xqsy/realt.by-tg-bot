@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from app.models import Listing, UserPreferences
 
+HIDDEN_ATTRIBUTE_SECTIONS = {"Местоположение"}
+HIDDEN_ATTRIBUTE_KEYS = {"furniture"}
 
 def format_preferences(prefs: UserPreferences, city_label: str) -> str:
     min_price = str(prefs.min_price) if prefs.min_price is not None else "не задана"
@@ -17,14 +19,14 @@ def format_preferences(prefs: UserPreferences, city_label: str) -> str:
 
 
 def format_listing_short(index: int, listing: Listing) -> str:
-    pieces = [f"Объявление {index}", listing.title, f"Цена: {listing.price_label}"]
+    pieces = [f"Объявление {index}", f"Цена: {listing.price_label}"]
     details: list[str] = []
     if listing.rooms is not None:
         details.append(f"Комнаты: {listing.rooms}")
     if listing.area_m2 is not None:
         details.append(f"Площадь: {listing.area_m2:g} м²")
     if listing.floor is not None and listing.floors_total is not None:
-        details.append(f"Этаж: {listing.floor}/{listing.floors_total}")
+        details.append(f"Этаж: {listing.floor} из {listing.floors_total}")
     if details:
         pieces.extend(details)
     if listing.address:
@@ -36,7 +38,7 @@ def format_listing_short(index: int, listing: Listing) -> str:
 
 
 def format_listing_full(listing: Listing) -> str:
-    lines = [listing.title, f"Цена: {listing.price_label}"]
+    lines = [f"Цена: {listing.price_label}"]
     if listing.address:
         lines.append(f"Адрес: {listing.address}")
     overview: list[str] = []
@@ -45,7 +47,7 @@ def format_listing_full(listing: Listing) -> str:
     if listing.area_m2 is not None:
         overview.append(f"Площадь: {listing.area_m2:g} м²")
     if listing.floor is not None and listing.floors_total is not None:
-        overview.append(f"Этаж: {listing.floor}/{listing.floors_total}")
+        overview.append(f"Этаж: {listing.floor} из {listing.floors_total}")
     if overview:
         lines.append("Характеристики:")
         for item in overview:
@@ -58,23 +60,27 @@ def format_listing_full(listing: Listing) -> str:
         lines.append(f"Контакт: {listing.contact_name}")
     if listing.phone_numbers:
         lines.append("Телефоны: " + ", ".join(listing.phone_numbers))
-    if listing.published_at:
-        lines.append(f"Дата: {listing.published_at}")
     if listing.description:
         lines.append("")
         lines.append("Описание:")
         lines.append(listing.description[:1800])
     if listing.attributes:
         for key, value in listing.attributes.items():
+            if key in HIDDEN_ATTRIBUTE_SECTIONS:
+                continue
             lines.append("")
             lines.append(f"{key}:")
             if isinstance(value, dict):
                 for nested_key, nested_value in value.items():
+                    if nested_key in HIDDEN_ATTRIBUTE_KEYS:
+                        continue
                     lines.append(f"- {nested_key}: {nested_value}")
             elif isinstance(value, list):
                 for item in value:
                     lines.append(f"- {item}")
             else:
+                if key in HIDDEN_ATTRIBUTE_KEYS:
+                    continue
                 lines.append(f"- {value}")
     lines.append("")
     lines.append("Ссылка:")

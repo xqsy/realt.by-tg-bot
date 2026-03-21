@@ -62,9 +62,19 @@ def rooms_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def search_pagination_keyboard(has_next_page: bool) -> InlineKeyboardMarkup | None:
-    if not has_next_page:
-        return None
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(text="Следующая страница", callback_data="search:next")]]
+def search_navigation_keyboard(has_previous: bool, has_next: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    navigation_row: list[InlineKeyboardButton] = []
+    if has_previous:
+        navigation_row.append(InlineKeyboardButton(text="Предыдущее", callback_data="search:prev"))
+    if has_next:
+        navigation_row.append(InlineKeyboardButton(text="Следующее", callback_data="search:next"))
+    if navigation_row:
+        rows.append(navigation_row)
+    rows.append(
+        [
+            InlineKeyboardButton(text="Фильтры", callback_data="menu:filters"),
+            InlineKeyboardButton(text="В меню", callback_data="search:menu"),
+        ]
     )
+    return InlineKeyboardMarkup(rows)

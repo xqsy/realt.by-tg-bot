@@ -57,6 +57,10 @@ class HousingQueryAnalyzer:
             "или refine, если он дополняет или уточняет предыдущий запрос. "
             "city_key может быть только одним из: "
             f"{city_options}. "
+            "Цены всегда возвращай в белорусских рублях, не в долларах. "
+            "Если пользователь пишет 'до 1200', 'за 1200', 'не дороже 1200' или просто указывает бюджет без нижней границы, "
+            "то заполняй только max_price=1200, а min_price оставляй null. "
+            "min_price заполняй только если пользователь явно задал нижнюю границу, например 'от 800'. "
             "Если значение неизвестно, верни null. features должен быть массивом коротких строк. "
             "summary должен быть кратким русским описанием распознанных критериев."
         )
@@ -106,12 +110,15 @@ class HousingQueryAnalyzer:
         features = parsed.get("features")
         if not isinstance(features, list):
             features = []
+        min_price = self._as_int(parsed.get("min_price"))
+        max_price = self._as_int(parsed.get("max_price"))
+        min_price, max_price = self._normalize_prices(query, min_price, max_price)
         return QueryAnalysis(
             original_query=query,
             intent=intent,
             city_key=city_key,
-            min_price=self._as_int(parsed.get("min_price")),
-            max_price=self._as_int(parsed.get("max_price")),
+            min_price=min_price,
+            max_price=max_price,
             rooms=self._as_int(parsed.get("rooms")),
             features=[str(item).strip().lower() for item in features if str(item).strip()],
             summary=str(parsed.get("summary") or "").strip(),
@@ -169,6 +176,23 @@ class HousingQueryAnalyzer:
             return int(str(value).strip())
         except (TypeError, ValueError):
             return None
+
+    def _normalize_prices(self, query: str, min_price: int | None, max_price: int | None) -> tuple[int | None, int | None]:
+        normalized_query = query.lower()
+        budget_without_lower_bound = re.search(
+            r"(?:\bдо\s+\d|\bза\s+\d|\bне\s+дороже\s+\d|\bне\s+больше\s+\d|\bбюджет\s+\d)",
+            normalized_query,
+        )
+        explicit_lower_bound = re.search(r"\bот\s+\d", normalized_query)
+        if min_price is not None and max_price is not None and min_price > max_price:
+            min_price, max_price = max_price, min_price
+        if budget_without_lower_bound and not explicit_lower_bound:
+            if max_price is None and min_price is not None:
+                max_price = min_price
+                min_price = None
+            elif min_price is not None and max_price is not None and min_price == max_price:
+                min_price = None
+        return min_price, max_price
 
     def _parse_json_response(self, content: str) -> dict[str, object]:
         try:

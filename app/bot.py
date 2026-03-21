@@ -230,7 +230,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await _perform_search(update, context)
         return
     prefs = repository.get(update.effective_user.id)
+    analysis_wait_message = await update.message.reply_text("Анализирую запрос через ИИ...")
     analysis = await query_analyzer.analyze(update.message.text, prefs)
+    try:
+        await analysis_wait_message.delete()
+    except BadRequest:
+        pass
     if not analysis.ai_available:
         await update.message.reply_text("ИИ-поиск временно недоступен. Попробуйте позже или используйте фильтры вручную.", reply_markup=main_menu_keyboard())
         return

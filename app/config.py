@@ -22,7 +22,6 @@ CITY_URLS = {
 class Settings:
     bot_token: str
     request_timeout: int
-    max_pages_per_city: int
     data_dir: Path
 
 
@@ -31,6 +30,5 @@ def load_settings() -> Settings:
     return Settings(
         bot_token=os.getenv("BOT_TOKEN", ""),
         request_timeout=int(os.getenv("REQUEST_TIMEOUT", "20")),
-        max_pages_per_city=int(os.getenv("MAX_PAGES_PER_CITY", "3")),
         data_dir=data_dir,
     )

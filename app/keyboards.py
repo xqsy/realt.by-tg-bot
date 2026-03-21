@@ -60,3 +60,11 @@ def rooms_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Любое количество", callback_data="rooms:any")],
         ]
     )
+
+
+def search_pagination_keyboard(has_next_page: bool) -> InlineKeyboardMarkup | None:
+    if not has_next_page:
+        return None
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(text="Следующая страница", callback_data="search:next")]]
+    )

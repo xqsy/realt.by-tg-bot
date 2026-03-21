@@ -8,13 +8,15 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 
 from app.config import CITY_URLS, load_settings
 from app.formatters import format_listing_full, format_listing_short, format_preferences, split_message
-from app.keyboards import city_keyboard, filters_keyboard, main_menu_keyboard, rooms_keyboard
+from app.keyboards import city_keyboard, filters_keyboard, main_menu_keyboard, rooms_keyboard, search_pagination_keyboard
 from app.parser import RealtParser
 from app.storage import UserPreferencesRepository
 
 settings = load_settings()
 repository = UserPreferencesRepository(settings.data_dir / "users.sqlite3")
 parser = RealtParser(settings)
+USER_PAGE_SIZE = 5
+SEARCH_FETCH_LIMIT = 20
 
 
 async def _send_long_message(target_message, text: str) -> None:
@@ -102,6 +104,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         repository.save(prefs)
         await query.message.reply_text("Фильтры сброшены.", reply_markup=main_menu_keyboard())
         return
+    if data == "search:next":
+        await _show_next_page(update, context)
+        return
     if data == "filter:min_price":
         context.user_data["pending_filter"] = "min_price"
         await query.message.reply_text("Введите минимальную цену в BYN, например: 500")
@@ -171,7 +176,7 @@ async def _perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     city_label = _city_label(prefs.city_key)
     waiting_message = await message.reply_text(f"Ищу объявления: {city_label}...")
     try:
-        result = await parser.search(prefs, limit=5)
+        result = await parser.search(prefs, limit=SEARCH_FETCH_LIMIT)
     except Exception as exc:
         logging.exception("Search failed", exc_info=exc)
         await waiting_message.edit_text("Не удалось получить объявления с realt.by. Попробуйте позже.")
@@ -186,17 +191,66 @@ async def _perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await waiting_message.delete()
     except BadRequest:
         pass
+    context.user_data["search_results"] = result.items
+    context.user_data["search_city_label"] = city_label
+    context.user_data["search_page"] = 0
+    await _send_search_page(message, context, prefs)
+
+
+async def _show_next_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.message is None:
+        return
+    results = context.user_data.get("search_results")
+    if not isinstance(results, list) or not results:
+        await query.message.reply_text("Сначала выполните поиск объявлений.", reply_markup=main_menu_keyboard())
+        return
+    current_page = context.user_data.get("search_page", 0)
+    if not isinstance(current_page, int):
+        current_page = 0
+    next_page = current_page + 1
+    if next_page * USER_PAGE_SIZE >= len(results):
+        await query.message.reply_text("Больше объявлений нет.", reply_markup=main_menu_keyboard())
+        return
+    context.user_data["search_page"] = next_page
+    if update.effective_user is None:
+        await query.message.reply_text("Не удалось получить параметры поиска.", reply_markup=main_menu_keyboard())
+        return
+    prefs = repository.get(update.effective_user.id)
+    await _send_search_page(query.message, context, prefs)
+
+
+async def _send_search_page(target_message, context: ContextTypes.DEFAULT_TYPE, prefs) -> None:
+    results = context.user_data.get("search_results")
+    city_label = context.user_data.get("search_city_label")
+    page = context.user_data.get("search_page", 0)
+    if not isinstance(results, list) or not isinstance(city_label, str) or not isinstance(page, int):
+        await target_message.reply_text("Не удалось подготовить результаты поиска.", reply_markup=main_menu_keyboard())
+        return
+    start = page * USER_PAGE_SIZE
+    end = start + USER_PAGE_SIZE
+    items = results[start:end]
+    if not items:
+        await target_message.reply_text("Больше объявлений нет.", reply_markup=main_menu_keyboard())
+        return
+    total_pages = (len(results) + USER_PAGE_SIZE - 1) // USER_PAGE_SIZE
     summary = [
-        f"Найдено {len(result.items)} объявлений. Город: {city_label}",
+        f"Найдено объявлений: {len(results)}",
+        f"Город: {city_label}",
+        f"Страница: {page + 1} из {total_pages}",
+        "",
         format_preferences(prefs, city_label),
         "",
     ]
-    for index, item in enumerate(result.items, start=1):
+    for index, item in enumerate(items, start=start + 1):
         summary.append(format_listing_short(index, item))
         summary.append("")
-    await _send_long_message(message, "\n".join(summary).strip())
-    for item in result.items:
-        await _send_long_message(message, format_listing_full(item))
+    await target_message.reply_text(
+        "\n".join(summary).strip(),
+        reply_markup=search_pagination_keyboard(end < len(results)) or main_menu_keyboard(),
+    )
+    for item in items:
+        await _send_long_message(target_message, format_listing_full(item))
 
 
 def _parse_price_input(raw: str) -> int | None:

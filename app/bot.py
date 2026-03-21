@@ -315,6 +315,10 @@ async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     if new_index >= len(results):
         if exhausted:
             await query.answer("Больше объявлений нет.")
+            await query.message.reply_text(
+                "Больше квартир по таким фильтрам не найдено.",
+                reply_markup=main_menu_keyboard(),
+            )
             return
         prefs = repository.get(update.effective_user.id)
         if prefs.city_key != city_key:
@@ -334,6 +338,10 @@ async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             results = ranked_results
         if not loaded or not isinstance(results, list) or new_index >= len(results):
             await query.answer("Больше объявлений нет.")
+            await query.message.reply_text(
+                "Больше квартир по таким фильтрам не найдено.",
+                reply_markup=main_menu_keyboard(),
+            )
             return
     state["index"] = new_index
     await _send_search_item(query.message, context)

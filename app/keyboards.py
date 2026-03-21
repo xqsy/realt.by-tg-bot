@@ -1,43 +1,62 @@
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardMarkup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.config import CITY_URLS
 
 
 def city_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
+    rows: list[list[InlineKeyboardButton]] = []
+    current_row: list[InlineKeyboardButton] = []
     for city_key, (label, _) in CITY_URLS.items():
-        builder.button(text=label, callback_data=f"city:{city_key}")
-    builder.adjust(2)
-    return builder.as_markup()
+        current_row.append(InlineKeyboardButton(text=label, callback_data=f"city:{city_key}"))
+        if len(current_row) == 2:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+    return InlineKeyboardMarkup(rows)
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Выбрать город", callback_data="menu:city")
-    builder.button(text="Настроить фильтры", callback_data="menu:filters")
-    builder.button(text="Показать объявления", callback_data="menu:search")
-    builder.button(text="Сбросить фильтры", callback_data="menu:reset")
-    builder.adjust(2)
-    return builder.as_markup()
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(text="Выбрать город", callback_data="menu:city"),
+                InlineKeyboardButton(text="Настроить фильтры", callback_data="menu:filters"),
+            ],
+            [
+                InlineKeyboardButton(text="Показать объявления", callback_data="menu:search"),
+                InlineKeyboardButton(text="Сбросить фильтры", callback_data="menu:reset"),
+            ],
+        ]
+    )
 
 
 def filters_keyboard(current_rooms: int | None) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Мин. цена", callback_data="filter:min_price")
-    builder.button(text="Макс. цена", callback_data="filter:max_price")
-    builder.button(text=f"Комнаты: {current_rooms or 'любые'}", callback_data="filter:rooms")
-    builder.button(text="Сбросить цену", callback_data="filter:clear_price")
-    builder.adjust(2)
-    return builder.as_markup()
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(text="Мин. цена", callback_data="filter:min_price"),
+                InlineKeyboardButton(text="Макс. цена", callback_data="filter:max_price"),
+            ],
+            [
+                InlineKeyboardButton(text=f"Комнаты: {current_rooms or 'любые'}", callback_data="filter:rooms"),
+                InlineKeyboardButton(text="Сбросить цену", callback_data="filter:clear_price"),
+            ],
+        ]
+    )
 
 
 def rooms_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    for rooms in range(1, 5):
-        builder.button(text=str(rooms), callback_data=f"rooms:{rooms}")
-    builder.button(text="Любое количество", callback_data="rooms:any")
-    builder.adjust(4, 1)
-    return builder.as_markup()
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(text="1", callback_data="rooms:1"),
+                InlineKeyboardButton(text="2", callback_data="rooms:2"),
+                InlineKeyboardButton(text="3", callback_data="rooms:3"),
+                InlineKeyboardButton(text="4", callback_data="rooms:4"),
+            ],
+            [InlineKeyboardButton(text="Любое количество", callback_data="rooms:any")],
+        ]
+    )

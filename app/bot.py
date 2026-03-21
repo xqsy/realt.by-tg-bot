@@ -2,14 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import suppress
-
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from telegram import Update
+from telegram.error import BadRequest
+from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from app.config import CITY_URLS, load_settings
 from app.formatters import format_listing_full, format_listing_short, format_preferences, split_message
@@ -17,200 +12,164 @@ from app.keyboards import city_keyboard, filters_keyboard, main_menu_keyboard, r
 from app.parser import RealtParser
 from app.storage import UserPreferencesRepository
 
-router = Router()
-
-
-class FilterStates(StatesGroup):
-    waiting_for_min_price = State()
-    waiting_for_max_price = State()
-
-
 settings = load_settings()
 repository = UserPreferencesRepository(settings.data_dir / "users.sqlite3")
 parser = RealtParser(settings)
 
 
-async def _send_long_message(message: Message, text: str) -> None:
+async def _send_long_message(target_message, text: str) -> None:
     for chunk in split_message(text):
-        await message.answer(chunk, reply_markup=main_menu_keyboard())
+        await target_message.reply_text(chunk, reply_markup=main_menu_keyboard())
 
 
 def _city_label(city_key: str) -> str:
     return CITY_URLS[city_key][0]
 
 
-@router.message(CommandStart())
-async def start_handler(message: Message) -> None:
-    repository.get(message.from_user.id)
-    await message.answer(
+async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None:
+        return
+    repository.get(update.effective_user.id)
+    await update.message.reply_text(
         "Выберите город для поиска квартир на длительный срок:",
         reply_markup=city_keyboard(),
     )
 
 
-@router.message(Command("city"))
-async def city_command_handler(message: Message) -> None:
-    await message.answer("Выберите город:", reply_markup=city_keyboard())
+async def city_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
+    await update.message.reply_text("Выберите город:", reply_markup=city_keyboard())
 
 
-@router.message(Command("filters"))
-async def filters_command_handler(message: Message) -> None:
-    prefs = repository.get(message.from_user.id)
-    await message.answer(
+async def filters_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None:
+        return
+    prefs = repository.get(update.effective_user.id)
+    await update.message.reply_text(
         format_preferences(prefs, _city_label(prefs.city_key)),
         reply_markup=filters_keyboard(prefs.rooms),
     )
 
 
-@router.message(Command("search"))
-async def search_command_handler(message: Message) -> None:
-    await _perform_search(message)
+async def search_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _perform_search(update, context)
 
 
-@router.message(Command("reset_filters"))
-async def reset_command_handler(message: Message) -> None:
-    prefs = repository.get(message.from_user.id)
+async def reset_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None:
+        return
+    prefs = repository.get(update.effective_user.id)
     prefs.min_price = None
     prefs.max_price = None
     prefs.rooms = None
     repository.save(prefs)
-    await message.answer("Фильтры сброшены.", reply_markup=main_menu_keyboard())
+    await update.message.reply_text("Фильтры сброшены.", reply_markup=main_menu_keyboard())
 
 
-@router.callback_query(F.data.startswith("city:"))
-async def city_callback_handler(callback: CallbackQuery) -> None:
-    city_key = callback.data.split(":", 1)[1]
-    prefs = repository.get(callback.from_user.id)
-    prefs.city_key = city_key
-    repository.save(prefs)
-    await callback.message.edit_text(
-        f"Город установлен: {_city_label(city_key)}\n\nИспользуйте меню ниже.",
-        reply_markup=main_menu_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "menu:city")
-async def menu_city_callback_handler(callback: CallbackQuery) -> None:
-    await callback.message.answer("Выберите город:", reply_markup=city_keyboard())
-    await callback.answer()
-
-
-@router.callback_query(F.data == "menu:filters")
-async def menu_filters_callback_handler(callback: CallbackQuery) -> None:
-    prefs = repository.get(callback.from_user.id)
-    await callback.message.answer(
-        format_preferences(prefs, _city_label(prefs.city_key)),
-        reply_markup=filters_keyboard(prefs.rooms),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "menu:search")
-async def menu_search_callback_handler(callback: CallbackQuery) -> None:
-    await callback.answer("Ищу объявления...")
-    await _perform_search(callback.message)
-
-
-@router.callback_query(F.data == "menu:reset")
-async def menu_reset_callback_handler(callback: CallbackQuery) -> None:
-    prefs = repository.get(callback.from_user.id)
-    prefs.min_price = None
-    prefs.max_price = None
-    prefs.rooms = None
-    repository.save(prefs)
-    await callback.message.answer("Фильтры сброшены.", reply_markup=main_menu_keyboard())
-    await callback.answer()
-
-
-@router.callback_query(F.data == "filter:min_price")
-async def min_price_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(FilterStates.waiting_for_min_price)
-    await callback.message.answer("Введите минимальную цену в BYN, например: 500")
-    await callback.answer()
-
-
-@router.callback_query(F.data == "filter:max_price")
-async def max_price_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(FilterStates.waiting_for_max_price)
-    await callback.message.answer("Введите максимальную цену в BYN, например: 1200")
-    await callback.answer()
-
-
-@router.callback_query(F.data == "filter:rooms")
-async def rooms_callback_handler(callback: CallbackQuery) -> None:
-    await callback.message.answer("Выберите количество комнат:", reply_markup=rooms_keyboard())
-    await callback.answer()
-
-
-@router.callback_query(F.data == "filter:clear_price")
-async def clear_price_callback_handler(callback: CallbackQuery) -> None:
-    prefs = repository.get(callback.from_user.id)
-    prefs.min_price = None
-    prefs.max_price = None
-    repository.save(prefs)
-    await callback.message.answer("Фильтр по цене очищен.", reply_markup=main_menu_keyboard())
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("rooms:"))
-async def set_rooms_callback_handler(callback: CallbackQuery) -> None:
-    value = callback.data.split(":", 1)[1]
-    prefs = repository.get(callback.from_user.id)
-    prefs.rooms = None if value == "any" else int(value)
-    repository.save(prefs)
-    await callback.message.answer("Фильтр по комнатам обновлён.", reply_markup=main_menu_keyboard())
-    await callback.answer()
-
-
-@router.message(FilterStates.waiting_for_min_price)
-async def min_price_message_handler(message: Message, state: FSMContext) -> None:
-    value = _parse_price_input(message.text or "")
-    if value is None:
-        await message.answer("Не удалось распознать число. Введите только сумму в BYN.")
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or update.effective_user is None or query.message is None or query.data is None:
         return
-    prefs = repository.get(message.from_user.id)
-    prefs.min_price = value
-    repository.save(prefs)
-    await state.clear()
-    await message.answer("Минимальная цена сохранена.", reply_markup=main_menu_keyboard())
-
-
-@router.message(FilterStates.waiting_for_max_price)
-async def max_price_message_handler(message: Message, state: FSMContext) -> None:
-    value = _parse_price_input(message.text or "")
-    if value is None:
-        await message.answer("Не удалось распознать число. Введите только сумму в BYN.")
+    await query.answer()
+    data = query.data
+    prefs = repository.get(update.effective_user.id)
+    if data.startswith("city:"):
+        city_key = data.split(":", 1)[1]
+        prefs.city_key = city_key
+        repository.save(prefs)
+        await query.edit_message_text(
+            f"Город установлен: {_city_label(city_key)}\n\nИспользуйте меню ниже.",
+            reply_markup=main_menu_keyboard(),
+        )
         return
-    prefs = repository.get(message.from_user.id)
-    prefs.max_price = value
-    repository.save(prefs)
-    await state.clear()
-    await message.answer("Максимальная цена сохранена.", reply_markup=main_menu_keyboard())
-
-
-@router.message()
-async def fallback_handler(message: Message) -> None:
-    if not message.text:
-        await message.answer("Используйте кнопки меню или команды /start, /city, /filters, /search.")
+    if data == "menu:city":
+        await query.message.reply_text("Выберите город:", reply_markup=city_keyboard())
         return
-    lowered = message.text.lower().strip()
+    if data == "menu:filters":
+        await query.message.reply_text(
+            format_preferences(prefs, _city_label(prefs.city_key)),
+            reply_markup=filters_keyboard(prefs.rooms),
+        )
+        return
+    if data == "menu:search":
+        await _perform_search(update, context)
+        return
+    if data == "menu:reset":
+        prefs.min_price = None
+        prefs.max_price = None
+        prefs.rooms = None
+        repository.save(prefs)
+        await query.message.reply_text("Фильтры сброшены.", reply_markup=main_menu_keyboard())
+        return
+    if data == "filter:min_price":
+        context.user_data["pending_filter"] = "min_price"
+        await query.message.reply_text("Введите минимальную цену в BYN, например: 500")
+        return
+    if data == "filter:max_price":
+        context.user_data["pending_filter"] = "max_price"
+        await query.message.reply_text("Введите максимальную цену в BYN, например: 1200")
+        return
+    if data == "filter:rooms":
+        await query.message.reply_text("Выберите количество комнат:", reply_markup=rooms_keyboard())
+        return
+    if data == "filter:clear_price":
+        prefs.min_price = None
+        prefs.max_price = None
+        repository.save(prefs)
+        await query.message.reply_text("Фильтр по цене очищен.", reply_markup=main_menu_keyboard())
+        return
+    if data.startswith("rooms:"):
+        value = data.split(":", 1)[1]
+        prefs.rooms = None if value == "any" else int(value)
+        repository.save(prefs)
+        await query.message.reply_text("Фильтр по комнатам обновлён.", reply_markup=main_menu_keyboard())
+        return
+
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user is None or update.message is None or not update.message.text:
+        if update.message is not None:
+            await update.message.reply_text("Используйте кнопки меню или команды /start, /city, /filters, /search.")
+        return
+    pending_filter = context.user_data.get("pending_filter")
+    if pending_filter is not None:
+        value = _parse_price_input(update.message.text)
+        if value is None:
+            await update.message.reply_text("Не удалось распознать число. Введите только сумму в BYN.")
+            return
+        prefs = repository.get(update.effective_user.id)
+        if pending_filter == "min_price":
+            prefs.min_price = value
+            answer = "Минимальная цена сохранена."
+        else:
+            prefs.max_price = value
+            answer = "Максимальная цена сохранена."
+        repository.save(prefs)
+        context.user_data.pop("pending_filter", None)
+        await update.message.reply_text(answer, reply_markup=main_menu_keyboard())
+        return
+    lowered = update.message.text.lower().strip()
     if lowered in {"город", "сменить город"}:
-        await city_command_handler(message)
+        await city_command_handler(update, context)
         return
     if lowered in {"фильтры", "настроить фильтры"}:
-        await filters_command_handler(message)
+        await filters_command_handler(update, context)
         return
     if lowered in {"поиск", "показать объявления"}:
-        await _perform_search(message)
+        await _perform_search(update, context)
         return
-    await message.answer("Используйте кнопки меню или команды /start, /city, /filters, /search.")
+    await update.message.reply_text("Используйте кнопки меню или команды /start, /city, /filters, /search.")
 
 
-async def _perform_search(message: Message) -> None:
-    prefs = repository.get(message.from_user.id)
+async def _perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    message = update.effective_message
+    if user is None or message is None:
+        return
+    prefs = repository.get(user.id)
     city_label = _city_label(prefs.city_key)
-    waiting_message = await message.answer(f"Ищу объявления: {city_label}...")
+    waiting_message = await message.reply_text(f"Ищу объявления: {city_label}...")
     try:
         result = await parser.search(prefs, limit=5)
     except Exception as exc:
@@ -223,8 +182,10 @@ async def _perform_search(message: Message) -> None:
             reply_markup=main_menu_keyboard(),
         )
         return
-    with suppress(TelegramBadRequest):
+    try:
         await waiting_message.delete()
+    except BadRequest:
+        pass
     summary = [
         f"Найдено {len(result.items)} объявлений. Город: {city_label}",
         format_preferences(prefs, city_label),
@@ -243,19 +204,17 @@ def _parse_price_input(raw: str) -> int | None:
     return int(digits) if digits else None
 
 
-async def _main() -> None:
+def run() -> None:
     if not settings.bot_token:
         raise RuntimeError("Не задан BOT_TOKEN в .env")
     logging.basicConfig(level=logging.INFO)
-    bot = Bot(settings.bot_token)
-    dispatcher = Dispatcher()
-    dispatcher.include_router(router)
-    try:
-        await dispatcher.start_polling(bot)
-    finally:
-        await parser.close()
-        await bot.session.close()
-
-
-def run() -> None:
-    asyncio.run(_main())
+    asyncio.set_event_loop(asyncio.new_event_loop())
+    application = ApplicationBuilder().token(settings.bot_token).build()
+    application.add_handler(CommandHandler("start", start_handler))
+    application.add_handler(CommandHandler("city", city_command_handler))
+    application.add_handler(CommandHandler("filters", filters_command_handler))
+    application.add_handler(CommandHandler("search", search_command_handler))
+    application.add_handler(CommandHandler("reset_filters", reset_command_handler))
+    application.add_handler(CallbackQueryHandler(callback_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    application.run_polling()

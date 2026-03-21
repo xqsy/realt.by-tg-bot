@@ -69,7 +69,7 @@ class RealtParser:
         return self._deduplicate(candidates)
 
     def _extract_listings_from_json(self, html: str, city_label: str) -> list[Listing]:
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         listings: list[Listing] = []
         for script in soup.find_all("script"):
             raw = script.string or script.get_text("", strip=True)
@@ -161,7 +161,7 @@ class RealtParser:
         )
 
     def _extract_listings_from_html(self, html: str, base_url: str, city_label: str) -> list[Listing]:
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         listings: list[Listing] = []
         for anchor in soup.find_all("a", href=True):
             href = anchor["href"].strip()
@@ -194,7 +194,7 @@ class RealtParser:
         return self._merge_with_detail_text(listing, html)
 
     def _merge_with_detail_text(self, listing: Listing, html: str) -> Listing:
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text(" ", strip=True)
         merged = replace(listing)
         if merged.price_byn is None:

@@ -22,6 +22,23 @@ PHONE_RE = re.compile(r"\+?\d[\d\s()\-]{7,}\d")
 DETAIL_PATH_RE = re.compile(r"^/(?:[a-z-]+/)?rent-flat-for-long/object/(\d+)/?$", re.IGNORECASE)
 SECTION_HEADERS = ["Параметры объекта", "Удобства", "Примечание", "Арендодатель", "Местоположение"]
 IGNORED_SECTION_LINES = {"Показать больше", "Скрыть", "Написать", "Показать контакты", "Контактное лицо"}
+SECTION_STOP_LINES = {
+    "Следить за ценой",
+    "Номер договора",
+    "Контактное лицо",
+    "АН Гарант успеха",
+}
+AMENITY_BLACKLIST_PARTS = (
+    "агентство недвижимости",
+    "унп",
+    "лицензия",
+    "мю рб",
+    "контактное лицо",
+    "показать контакты",
+    "написать",
+    "следить за ценой",
+    "договор",
+)
 PARAMETER_LABELS = [
     "Количество комнат",
     "Раздельных комнат",
@@ -391,7 +408,7 @@ class RealtParser:
             if line == section_header:
                 in_section = True
                 continue
-            if in_section and line in SECTION_HEADERS:
+            if in_section and (line in SECTION_HEADERS or line in SECTION_STOP_LINES):
                 break
             if in_section:
                 section_lines.append(line)
@@ -401,7 +418,7 @@ class RealtParser:
         values: list[str] = []
         for line in self._extract_section_lines(text, section_header):
             cleaned = line.lstrip("- ").strip()
-            if not cleaned or cleaned in IGNORED_SECTION_LINES:
+            if not cleaned or cleaned in IGNORED_SECTION_LINES or self._should_skip_amenity(cleaned):
                 continue
             if cleaned not in values:
                 values.append(cleaned)
@@ -427,6 +444,19 @@ class RealtParser:
         if not lines:
             return None
         return lines[0]
+
+    def _should_skip_amenity(self, value: str) -> bool:
+        lowered = value.lower()
+        if lowered in {"-", ",", "."}:
+            return True
+        if any(part in lowered for part in AMENITY_BLACKLIST_PARTS):
+            return True
+        digits_only = re.sub(r"\D", "", value)
+        if digits_only and re.fullmatch(r"\d{8,}", digits_only):
+            return True
+        if re.fullmatch(r"\d{2}\.\d{2}\.\d{4}", value):
+            return True
+        return False
 
     def _build_address_from_location(self, location: dict[str, str]) -> str | None:
         parts = [location.get("Населенный пункт"), location.get("Улица"), location.get("Номер дома")]

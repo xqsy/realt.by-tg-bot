@@ -44,6 +44,9 @@ def filters_keyboard(current_rooms: int | None) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=f"Комнаты: {current_rooms or 'любые'}", callback_data="filter:rooms"),
                 InlineKeyboardButton(text="Сбросить цену", callback_data="filter:clear_price"),
             ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data="filter:back"),
+            ],
         ]
     )
 

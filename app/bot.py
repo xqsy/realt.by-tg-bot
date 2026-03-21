@@ -187,6 +187,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         _clear_search_state(context)
         await query.message.reply_text("Фильтр по цене очищен.", reply_markup=main_menu_keyboard())
         return
+    if data == "filter:back":
+        try:
+            await query.message.delete()
+        except BadRequest:
+            pass
+        return
     if data.startswith("rooms:"):
         value = data.split(":", 1)[1]
         prefs.rooms = None if value == "any" else int(value)

@@ -367,7 +367,10 @@ def _get_query_analysis(context: ContextTypes.DEFAULT_TYPE) -> QueryAnalysis | N
 
 
 def _apply_query_analysis(prefs: UserPreferences, analysis: QueryAnalysis) -> UserPreferences:
-    updated = replace(prefs)
+    if analysis.intent == "replace":
+        updated = UserPreferences(user_id=prefs.user_id, city_key=prefs.city_key)
+    else:
+        updated = replace(prefs)
     if analysis.city_key is not None:
         updated.city_key = analysis.city_key
     if analysis.min_price is not None:
@@ -381,6 +384,10 @@ def _apply_query_analysis(prefs: UserPreferences, analysis: QueryAnalysis) -> Us
 
 def _format_analysis_result(prefs: UserPreferences, analysis: QueryAnalysis) -> str:
     lines = ["Запрос распознан."]
+    if analysis.intent == "refine":
+        lines.append("Режим: уточнение текущего поиска")
+    else:
+        lines.append("Режим: новый поиск")
     lines.append(f"Город: {_city_label(prefs.city_key)}")
     lines.append(f"Цена от: {prefs.min_price if prefs.min_price is not None else 'не задана'}")
     lines.append(f"Цена до: {prefs.max_price if prefs.max_price is not None else 'не задана'}")

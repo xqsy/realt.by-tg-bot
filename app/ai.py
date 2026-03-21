@@ -14,6 +14,7 @@ from app.models import Listing, UserPreferences
 @dataclass(slots=True)
 class QueryAnalysis:
     original_query: str
+    intent: str = "replace"
     city_key: str | None = None
     min_price: int | None = None
     max_price: int | None = None
@@ -51,7 +52,9 @@ class HousingQueryAnalyzer:
         city_options = ", ".join(f"{key}: {label}" for key, (label, _) in CITY_URLS.items())
         prompt = (
             "Ты анализируешь запрос пользователя для подбора квартиры в долгосрочную аренду. "
-            "Верни только JSON с полями city_key, min_price, max_price, rooms, features, summary. "
+            "Верни только JSON с полями intent, city_key, min_price, max_price, rooms, features, summary. "
+            "intent должен быть replace, если пользователь начинает новый поиск с новыми критериями, "
+            "или refine, если он дополняет или уточняет предыдущий запрос. "
             "city_key может быть только одним из: "
             f"{city_options}. "
             "Если значение неизвестно, верни null. features должен быть массивом коротких строк. "
@@ -97,11 +100,15 @@ class HousingQueryAnalyzer:
         city_key = parsed.get("city_key")
         if city_key not in CITY_URLS:
             city_key = None
+        intent = str(parsed.get("intent") or "replace").strip().lower()
+        if intent not in {"replace", "refine"}:
+            intent = "replace"
         features = parsed.get("features")
         if not isinstance(features, list):
             features = []
         return QueryAnalysis(
             original_query=query,
+            intent=intent,
             city_key=city_key,
             min_price=self._as_int(parsed.get("min_price")),
             max_price=self._as_int(parsed.get("max_price")),

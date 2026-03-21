@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 
@@ -88,7 +89,8 @@ class HousingQueryAnalyzer:
             return heuristic
         try:
             remote = await self._remote_parse(query, current_prefs)
-        except Exception:
+        except Exception as exc:
+            logging.warning("AI query analysis fallback triggered: %s", exc)
             return heuristic
         return self._merge_with_heuristic(remote, heuristic)
 
@@ -128,7 +130,7 @@ class HousingQueryAnalyzer:
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
             ],
         }
-        if "openrouter.ai" in self._settings.ai_base_url:
+        if self._settings.ai_enable_reasoning and "openrouter.ai" in self._settings.ai_base_url:
             request_payload["reasoning"] = {"enabled": True}
         async with httpx.AsyncClient(timeout=self._settings.request_timeout) as client:
             response = await client.post(
@@ -141,6 +143,8 @@ class HousingQueryAnalyzer:
                 },
                 json=request_payload,
             )
+            if response.status_code >= 400:
+                raise RuntimeError(f"AI provider error {response.status_code}: {response.text[:500]}")
             response.raise_for_status()
         payload = response.json()
         content = str(payload["choices"][0]["message"].get("content") or "").strip()

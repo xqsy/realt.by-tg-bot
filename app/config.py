@@ -26,6 +26,7 @@ class Settings:
     ai_api_key: str
     ai_base_url: str
     ai_model: str
+    ai_enable_reasoning: bool
 
 
 def load_settings() -> Settings:
@@ -37,4 +38,5 @@ def load_settings() -> Settings:
         ai_api_key=os.getenv("AI_API_KEY", ""),
         ai_base_url=os.getenv("AI_BASE_URL", "https://openrouter.ai/api/v1"),
         ai_model=os.getenv("AI_MODEL", ""),
+        ai_enable_reasoning=os.getenv("AI_ENABLE_REASONING", "false").strip().lower() in {"1", "true", "yes", "on"},
     )

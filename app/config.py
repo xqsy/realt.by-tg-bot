@@ -23,6 +23,9 @@ class Settings:
     bot_token: str
     request_timeout: int
     data_dir: Path
+    ai_api_key: str
+    ai_base_url: str
+    ai_model: str
 
 
 def load_settings() -> Settings:
@@ -31,4 +34,7 @@ def load_settings() -> Settings:
         bot_token=os.getenv("BOT_TOKEN", ""),
         request_timeout=int(os.getenv("REQUEST_TIMEOUT", "20")),
         data_dir=data_dir,
+        ai_api_key=os.getenv("AI_API_KEY", ""),
+        ai_base_url=os.getenv("AI_BASE_URL", "https://openrouter.ai/api/v1"),
+        ai_model=os.getenv("AI_MODEL", ""),
     )

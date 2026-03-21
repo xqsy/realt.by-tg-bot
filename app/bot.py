@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
+
 from telegram import Update
 from telegram.error import BadRequest
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
+from app.ai import HousingQueryAnalyzer, QueryAnalysis
 from app.config import CITY_URLS, load_settings
 from app.formatters import format_listing_full, format_preferences, split_message
 from app.keyboards import city_keyboard, filters_keyboard, main_menu_keyboard, rooms_keyboard, search_navigation_keyboard
+from app.models import UserPreferences
 from app.parser import RealtParser
 from app.storage import UserPreferencesRepository
 
 settings = load_settings()
 repository = UserPreferencesRepository(settings.data_dir / "users.sqlite3")
 parser = RealtParser(settings)
+query_analyzer = HousingQueryAnalyzer(settings)
 SEARCH_STATE_KEY = "search_state"
 
 
@@ -29,6 +34,7 @@ def _city_label(city_key: str) -> str:
 
 def _clear_search_state(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(SEARCH_STATE_KEY, None)
+    context.user_data.pop("query_analysis", None)
 
 
 def _create_search_state(city_label: str, city_key: str) -> dict[str, object]:
@@ -219,7 +225,21 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if lowered in {"поиск", "показать объявления"}:
         await _perform_search(update, context)
         return
-    await update.message.reply_text("Используйте кнопки меню или команды /start, /city, /filters, /search.")
+    prefs = repository.get(update.effective_user.id)
+    analysis = await query_analyzer.analyze(update.message.text, prefs)
+    if not analysis.has_updates():
+        await update.message.reply_text(
+            "Используйте кнопки меню или команды /start, /city, /filters, /search. Также можно написать запрос в свободной форме, например: двушка в Минске до 1200 рядом с метро.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+    updated_prefs = _apply_query_analysis(prefs, analysis)
+    repository.save(updated_prefs)
+    _clear_search_state(context)
+    context.user_data["query_analysis"] = analysis
+    answer = _format_analysis_result(updated_prefs, analysis)
+    await update.message.reply_text(answer, reply_markup=main_menu_keyboard())
+    await _perform_search(update, context)
 
 
 async def _perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -228,6 +248,7 @@ async def _perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if user is None or message is None:
         return
     prefs = repository.get(user.id)
+    analysis = _get_query_analysis(context)
     city_label = _city_label(prefs.city_key)
     waiting_message = await message.reply_text(f"Ищу объявления: {city_label}...")
     context.user_data[SEARCH_STATE_KEY] = _create_search_state(city_label, prefs.city_key)
@@ -246,10 +267,18 @@ async def _perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         _clear_search_state(context)
         return
+    if analysis is not None:
+        ranked_results = query_analyzer.rank_listings(results, analysis, prefs)
+        state["results"] = ranked_results
     try:
         await waiting_message.delete()
     except BadRequest:
         pass
+    if analysis is not None and analysis.summary:
+        await message.reply_text(
+            f"ИИ-анализ запроса ({analysis.source}): {analysis.summary}",
+            reply_markup=main_menu_keyboard(),
+        )
     await _send_search_item(message, context)
 
 
@@ -289,6 +318,11 @@ async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             return
         state = _get_search_state(context)
         results = state.get("results") if state is not None else None
+        analysis = _get_query_analysis(context)
+        if analysis is not None and state is not None and isinstance(results, list):
+            ranked_results = query_analyzer.rank_listings(results, analysis, prefs)
+            state["results"] = ranked_results
+            results = ranked_results
         if not loaded or not isinstance(results, list) or new_index >= len(results):
             await query.answer("Больше объявлений нет.")
             return
@@ -321,6 +355,36 @@ async def _send_search_item(target_message, context: ContextTypes.DEFAULT_TYPE) 
 def _parse_price_input(raw: str) -> int | None:
     digits = "".join(ch for ch in raw if ch.isdigit())
     return int(digits) if digits else None
+
+
+def _get_query_analysis(context: ContextTypes.DEFAULT_TYPE) -> QueryAnalysis | None:
+    analysis = context.user_data.get("query_analysis")
+    return analysis if isinstance(analysis, QueryAnalysis) else None
+
+
+def _apply_query_analysis(prefs: UserPreferences, analysis: QueryAnalysis) -> UserPreferences:
+    updated = replace(prefs)
+    if analysis.city_key is not None:
+        updated.city_key = analysis.city_key
+    if analysis.min_price is not None:
+        updated.min_price = analysis.min_price
+    if analysis.max_price is not None:
+        updated.max_price = analysis.max_price
+    if analysis.rooms is not None:
+        updated.rooms = analysis.rooms
+    return updated
+
+
+def _format_analysis_result(prefs: UserPreferences, analysis: QueryAnalysis) -> str:
+    lines = ["Запрос распознан."]
+    lines.append(f"Город: {_city_label(prefs.city_key)}")
+    lines.append(f"Цена от: {prefs.min_price if prefs.min_price is not None else 'не задана'}")
+    lines.append(f"Цена до: {prefs.max_price if prefs.max_price is not None else 'не задана'}")
+    lines.append(f"Комнаты: {prefs.rooms if prefs.rooms is not None else 'любое количество'}")
+    if analysis.features:
+        lines.append("Пожелания: " + ", ".join(analysis.features))
+    lines.append(f"Источник анализа: {analysis.source}")
+    return "\n".join(lines)
 
 
 def run() -> None:

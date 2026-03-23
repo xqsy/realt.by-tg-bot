@@ -33,6 +33,11 @@ def _city_label(city_key: str) -> str:
 
 
 def _clear_search_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    state = _get_search_state(context)
+    if state is not None:
+        prefetch_task = state.get("prefetch_task")
+        if isinstance(prefetch_task, asyncio.Task) and not prefetch_task.done():
+            prefetch_task.cancel()
     context.user_data.pop(SEARCH_STATE_KEY, None)
     context.user_data.pop("query_analysis", None)
 
@@ -47,6 +52,8 @@ def _create_search_state(city_label: str, city_key: str) -> dict[str, object]:
         "seen_ids": set(),
         "exhausted": False,
         "max_page": None,
+        "prefetch_task": None,
+        "prefetch_in_progress": False,
     }
 
 
@@ -60,6 +67,16 @@ async def _notify_search_exhausted(target_message) -> None:
         "Больше квартир по текущему запросу не найдено.",
         reply_markup=main_menu_keyboard(),
     )
+
+
+async def _safe_answer_callback(query, text: str | None = None) -> None:
+    try:
+        if text is None:
+            await query.answer()
+        else:
+            await query.answer(text)
+    except BadRequest:
+        pass
 
 
 async def _load_next_search_page(context: ContextTypes.DEFAULT_TYPE, prefs) -> bool:
@@ -93,6 +110,52 @@ async def _load_next_search_page(context: ContextTypes.DEFAULT_TYPE, prefs) -> b
             state["exhausted"] = True
             return False
         next_page += 1
+
+
+async def _prefetch_search_results(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    state = _get_search_state(context)
+    if state is None:
+        return
+    prefetch_in_progress = state.get("prefetch_in_progress")
+    exhausted = state.get("exhausted")
+    if not isinstance(prefetch_in_progress, bool) or not isinstance(exhausted, bool):
+        return
+    if prefetch_in_progress or exhausted:
+        return
+    state["prefetch_in_progress"] = True
+    try:
+        prefs = repository.get(user_id)
+        await _load_next_search_page(context, prefs)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logging.exception("Failed to prefetch search results", exc_info=exc)
+    finally:
+        refreshed_state = _get_search_state(context)
+        if refreshed_state is not None:
+            refreshed_state["prefetch_in_progress"] = False
+            refreshed_state["prefetch_task"] = None
+
+
+def _ensure_search_prefetch(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    state = _get_search_state(context)
+    if state is None:
+        return
+    results = state.get("results")
+    index = state.get("index")
+    exhausted = state.get("exhausted")
+    prefetch_in_progress = state.get("prefetch_in_progress")
+    prefetch_task = state.get("prefetch_task")
+    if not isinstance(results, list) or not isinstance(index, int) or not isinstance(exhausted, bool) or not isinstance(prefetch_in_progress, bool):
+        return
+    if exhausted or prefetch_in_progress:
+        return
+    if isinstance(prefetch_task, asyncio.Task) and not prefetch_task.done():
+        return
+    remaining_items = len(results) - index - 1
+    if remaining_items > 1:
+        return
+    state["prefetch_task"] = asyncio.create_task(_prefetch_search_results(context, user_id))
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -148,7 +211,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     if query is None or update.effective_user is None or query.message is None or query.data is None:
         return
-    await query.answer()
+    await _safe_answer_callback(query)
     data = query.data
     prefs = repository.get(update.effective_user.id)
     if data.startswith("city:"):
@@ -330,6 +393,7 @@ async def _perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if analysis is not None and analysis.summary:
         await message.reply_text(analysis.summary, reply_markup=main_menu_keyboard())
     await _send_search_item(message, context)
+    _ensure_search_prefetch(context, user.id)
 
 
 async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, step: int) -> None:
@@ -352,27 +416,43 @@ async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         current_index = 0
     new_index = current_index + step
     if new_index < 0:
-        await query.answer("Это первое объявление.")
+        await _safe_answer_callback(query, "Это первое объявление.")
         return
     if new_index >= len(results):
         if exhausted:
-            await query.answer("Больше объявлений нет.")
+            await _safe_answer_callback(query, "Больше объявлений нет.")
             await _notify_search_exhausted(query.message)
             return
         if prefs.city_key != city_key:
             prefs.city_key = city_key
-        loading_message = await query.message.reply_text("Идет поиск...")
+        prefetch_task = state.get("prefetch_task") if state is not None else None
+        loading_message = None
         try:
-            loaded = await _load_next_search_page(context, prefs)
+            if isinstance(prefetch_task, asyncio.Task) and not prefetch_task.done():
+                loading_message = await query.message.reply_text("Подбираю следующие варианты...")
+                try:
+                    await prefetch_task
+                except asyncio.CancelledError:
+                    loaded = False
+                state = _get_search_state(context)
+                results = state.get("results") if state is not None else None
+                if isinstance(results, list) and new_index < len(results):
+                    loaded = True
+                else:
+                    loaded = await _load_next_search_page(context, prefs)
+            else:
+                loading_message = await query.message.reply_text("Подбираю следующие варианты...")
+                loaded = await _load_next_search_page(context, prefs)
         except Exception as exc:
             logging.exception("Failed to load next search page", exc_info=exc)
             await query.message.reply_text("Не удалось загрузить следующую страницу объявлений.", reply_markup=main_menu_keyboard())
             return
         finally:
-            try:
-                await loading_message.delete()
-            except BadRequest:
-                pass
+            if loading_message is not None:
+                try:
+                    await loading_message.delete()
+                except BadRequest:
+                    pass
         state = _get_search_state(context)
         results = state.get("results") if state is not None else None
         analysis = _get_query_analysis(context)
@@ -381,11 +461,12 @@ async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             state["results"] = ranked_results
             results = ranked_results
         if not loaded or not isinstance(results, list) or new_index >= len(results):
-            await query.answer("Больше объявлений нет.")
+            await _safe_answer_callback(query, "Больше объявлений нет.")
             await _notify_search_exhausted(query.message)
             return
     state["index"] = new_index
     await _send_search_item(query.message, context)
+    _ensure_search_prefetch(context, update.effective_user.id)
 
 
 async def _send_search_item(target_message, context: ContextTypes.DEFAULT_TYPE) -> None:

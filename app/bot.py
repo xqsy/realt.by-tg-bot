@@ -55,6 +55,13 @@ def _get_search_state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, object] |
     return state if isinstance(state, dict) else None
 
 
+async def _notify_search_exhausted(target_message) -> None:
+    await target_message.reply_text(
+        "Больше квартир по текущему запросу не найдено.",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
 async def _load_next_search_page(context: ContextTypes.DEFAULT_TYPE, prefs) -> bool:
     state = _get_search_state(context)
     if state is None:
@@ -130,6 +137,7 @@ async def reset_command_handler(update: Update, context: ContextTypes.DEFAULT_TY
     prefs.max_price = None
     prefs.rooms = None
     repository.save(prefs)
+    _clear_search_state(context)
     await update.message.reply_text(
         format_preferences(prefs, _city_label(prefs.city_key)),
         reply_markup=main_menu_keyboard(),
@@ -295,6 +303,7 @@ async def _perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     analysis = _get_query_analysis(context)
     city_label = _city_label(prefs.city_key)
     waiting_message = await message.reply_text(f"Ищу объявления: {city_label}...")
+    _clear_search_state(context)
     context.user_data[SEARCH_STATE_KEY] = _create_search_state(city_label, prefs.city_key)
     try:
         loaded = await _load_next_search_page(context, prefs)
@@ -325,7 +334,7 @@ async def _perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, step: int) -> None:
     query = update.callback_query
-    if query is None or query.message is None:
+    if query is None or query.message is None or update.effective_user is None:
         return
     state = _get_search_state(context)
     if state is None:
@@ -338,6 +347,7 @@ async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     if not isinstance(results, list) or not results or not isinstance(exhausted, bool) or not isinstance(city_key, str):
         await query.message.reply_text("Сначала выполните поиск объявлений.", reply_markup=main_menu_keyboard())
         return
+    prefs = repository.get(update.effective_user.id)
     if not isinstance(current_index, int):
         current_index = 0
     new_index = current_index + step
@@ -347,12 +357,8 @@ async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     if new_index >= len(results):
         if exhausted:
             await query.answer("Больше объявлений нет.")
-            await query.message.reply_text(
-                "Больше квартир по таким фильтрам не найдено.",
-                reply_markup=main_menu_keyboard(),
-            )
+            await _notify_search_exhausted(query.message)
             return
-        prefs = repository.get(update.effective_user.id)
         if prefs.city_key != city_key:
             prefs.city_key = city_key
         loading_message = await query.message.reply_text("Идет поиск...")
@@ -376,10 +382,7 @@ async def _show_search_item(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             results = ranked_results
         if not loaded or not isinstance(results, list) or new_index >= len(results):
             await query.answer("Больше объявлений нет.")
-            await query.message.reply_text(
-                "Больше квартир по таким фильтрам не найдено.",
-                reply_markup=main_menu_keyboard(),
-            )
+            await _notify_search_exhausted(query.message)
             return
     state["index"] = new_index
     await _send_search_item(query.message, context)
@@ -397,6 +400,9 @@ async def _send_search_item(target_message, context: ContextTypes.DEFAULT_TYPE) 
         await target_message.reply_text("Не удалось подготовить результаты поиска.", reply_markup=main_menu_keyboard())
         return
     if index < 0 or index >= len(results):
+        if exhausted:
+            await _notify_search_exhausted(target_message)
+            return
         await target_message.reply_text("Больше объявлений нет.", reply_markup=main_menu_keyboard())
         return
     item = results[index]

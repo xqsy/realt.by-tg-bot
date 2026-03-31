@@ -88,6 +88,12 @@ AI_ENABLE_REASONING=false
 python main.py
 ```
 
+Для запуска сайта выполните:
+
+```bash
+python web_main.py
+```
+
 ## Как пользоваться
 
 После запуска бота можно:
@@ -106,16 +112,22 @@ python main.py
 ## Структура проекта
 
 ```text
-app/
-  bot.py         # логика Telegram-бота
+bot/
+  app.py         # логика Telegram-бота
+  keyboards.py   # inline-клавиатуры Telegram
+web/
+  app.py         # логика сайта на FastAPI
+  templates/
+    chat.html    # шаблон страницы сайта
+core/
   parser.py      # парсинг realt.by
   ai.py          # разбор текстовых запросов и ранжирование
   config.py      # настройки и города
   formatters.py  # форматирование сообщений
-  keyboards.py   # inline-клавиатуры
   models.py      # dataclass-модели
   storage.py     # хранение пользовательских фильтров
-main.py          # точка входа
+main.py          # точка входа Telegram-бота
+web_main.py      # точка входа сайта
 requirements.txt
 .env.example
 ```

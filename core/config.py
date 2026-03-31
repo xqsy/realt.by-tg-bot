@@ -17,6 +17,15 @@ CITY_URLS = {
     "vitebsk": ("Витебск", "https://realt.by/vitebsk-region/rent/flat-for-long/"),
 }
 
+CITY_UUIDS: dict[str, str] = {
+    "minsk":   "4cb07174-7b00-11eb-8943-0cc47adabd66",
+    "brest":   "4c8f8db2-7b00-11eb-8943-0cc47adabd66",
+    "gomel":   "4c95d414-7b00-11eb-8943-0cc47adabd66",
+    "grodno":  "4c97eac6-7b00-11eb-8943-0cc47adabd66",
+    "vitebsk": "4c9236d8-7b00-11eb-8943-0cc47adabd66",
+    "mogilev": "4cb0e950-7b00-11eb-8943-0cc47adabd66",
+}
+
 
 @dataclass(slots=True)
 class Settings:

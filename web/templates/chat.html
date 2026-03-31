@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ассистент по аренде квартир</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #f0f2f5;
+            --surface: #ffffff;
+            --border: #e0e3e8;
+            --bot-bubble: #ffffff;
+            --user-bubble: #1a73e8;
+            --user-bubble-text: #ffffff;
+            --bot-bubble-text: #1a1a2e;
+            --accent: #1a73e8;
+            --accent-hover: #1558c0;
+            --btn-bg: #eef2fb;
+            --btn-text: #1a73e8;
+            --btn-border: #c5d5f5;
+            --btn-hover: #dce8fd;
+            --error-bg: #fff0f0;
+            --error-border: #f5c2c2;
+            --error-text: #c0392b;
+            --meta-text: #6b7280;
+            --header-bg: #ffffff;
+            --shadow: 0 1px 3px rgba(0,0,0,.10);
+            --shadow-card: 0 2px 8px rgba(0,0,0,.10);
+        }
+
+        html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--bot-bubble-text); }
+
+        #app { display: flex; flex-direction: column; height: 100vh; max-width: 780px; margin: 0 auto; }
+
+        /* ── Header ── */
+        #header {
+            display: flex; align-items: center; gap: 12px;
+            padding: 12px 16px;
+            background: var(--header-bg); border-bottom: 1px solid var(--border);
+            box-shadow: var(--shadow); flex-shrink: 0; z-index: 10;
+        }
+        .avatar {
+            width: 40px; height: 40px; border-radius: 50%;
+            background: var(--accent); color: #fff;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px; flex-shrink: 0;
+        }
+        .header-info { flex: 1; }
+        .header-info .name { font-weight: 600; font-size: 15px; }
+        .header-info .status { font-size: 12px; color: #34a853; }
+
+        /* ── Messages ── */
+        #messages {
+            flex: 1; overflow-y: auto; padding: 16px 12px;
+            display: flex; flex-direction: column; gap: 4px;
+        }
+
+        .msg-row {
+            display: flex; align-items: flex-end; gap: 8px;
+            animation: fadeIn .18s ease;
+        }
+        .msg-row.user { flex-direction: row-reverse; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+        .msg-avatar {
+            width: 28px; height: 28px; border-radius: 50%;
+            background: var(--accent); color: #fff;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; flex-shrink: 0; align-self: flex-end;
+        }
+        .msg-row.user .msg-avatar { background: #6c757d; }
+
+        .bubble {
+            max-width: 72%; padding: 10px 14px;
+            border-radius: 18px; font-size: 14px; line-height: 1.5;
+            white-space: pre-wrap; word-break: break-word;
+        }
+        .bot .bubble {
+            background: var(--bot-bubble); color: var(--bot-bubble-text);
+            border-bottom-left-radius: 4px;
+            box-shadow: var(--shadow);
+        }
+        .user .bubble {
+            background: var(--user-bubble); color: var(--user-bubble-text);
+            border-bottom-right-radius: 4px;
+        }
+        .bubble.error {
+            background: var(--error-bg); color: var(--error-text);
+            border: 1px solid var(--error-border);
+        }
+
+        /* ── Typing indicator ── */
+        .typing-bubble {
+            background: var(--bot-bubble); box-shadow: var(--shadow);
+            padding: 12px 16px; border-radius: 18px; border-bottom-left-radius: 4px;
+            display: flex; gap: 4px; align-items: center;
+        }
+        .dot { width: 7px; height: 7px; border-radius: 50%; background: #aaa; animation: bounce .9s infinite; }
+        .dot:nth-child(2) { animation-delay: .15s; }
+        .dot:nth-child(3) { animation-delay: .30s; }
+        @keyframes bounce { 0%, 80%, 100% { transform: scale(0.7); opacity: .5; } 40% { transform: scale(1); opacity: 1; } }
+
+        /* ── Buttons row ── */
+        .buttons-row { max-width: 100%; padding: 2px 0 2px 36px; }
+        .buttons-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+        .action-btn {
+            padding: 7px 14px; font-size: 13px; font-family: inherit;
+            background: var(--btn-bg); color: var(--btn-text);
+            border: 1px solid var(--btn-border); border-radius: 20px;
+            cursor: pointer; transition: background .15s, border-color .15s;
+            white-space: nowrap;
+        }
+        .action-btn:hover { background: var(--btn-hover); border-color: var(--accent); }
+        .action-btn:active { transform: scale(.97); }
+
+        /* ── Listing card ── */
+        .listing-wrap { padding: 4px 0 4px 36px; max-width: 100%; }
+        .listing-card {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 14px; overflow: hidden;
+            box-shadow: var(--shadow-card);
+            max-width: 480px;
+        }
+        .listing-photos {
+            display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px;
+            max-height: 220px; overflow: hidden;
+        }
+        .listing-photos.one-photo { grid-template-columns: 1fr; }
+        .listing-photos img {
+            width: 100%; height: 110px; object-fit: cover;
+            display: block; background: #eee;
+        }
+        .listing-photos.one-photo img { height: 200px; }
+        .listing-body { padding: 14px; }
+        .listing-title { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+        .listing-price { font-size: 18px; font-weight: 700; color: var(--accent); margin-bottom: 8px; }
+        .listing-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--meta-text); margin-bottom: 10px; }
+        .listing-meta span::before { content: attr(data-icon) " "; }
+        .listing-desc {
+            font-size: 13px; color: #4a4a5a; line-height: 1.5;
+            margin-bottom: 4px; white-space: pre-wrap; word-break: break-word;
+        }
+        .listing-desc.collapsed {
+            max-height: 80px; overflow: hidden; position: relative;
+        }
+        .listing-desc.collapsed::after {
+            content: ""; position: absolute; bottom: 0; left: 0; right: 0;
+            height: 28px; background: linear-gradient(transparent, var(--surface));
+            pointer-events: none;
+        }
+        .desc-toggle {
+            font-size: 12px; color: var(--accent); background: none; border: none;
+            padding: 0; cursor: pointer; margin-bottom: 10px; display: inline-block;
+        }
+        .desc-toggle:hover { text-decoration: underline; }
+        .listing-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--border); padding-top: 10px; }
+        .listing-counter { font-size: 12px; color: var(--meta-text); }
+        .listing-link {
+            font-size: 13px; font-weight: 500; color: var(--accent);
+            text-decoration: none; padding: 6px 12px;
+            border: 1px solid var(--btn-border); border-radius: 8px;
+            background: var(--btn-bg);
+        }
+        .listing-link:hover { background: var(--btn-hover); }
+        .listing-nav { display: flex; gap: 6px; }
+        .nav-btn {
+            padding: 6px 14px; font-size: 13px; font-family: inherit;
+            background: var(--btn-bg); color: var(--btn-text);
+            border: 1px solid var(--btn-border); border-radius: 8px;
+            cursor: pointer; transition: background .15s;
+        }
+        .nav-btn:hover:not(:disabled) { background: var(--btn-hover); }
+        .nav-btn:disabled { opacity: .4; cursor: default; }
+
+        /* ── Input ── */
+        #input-area {
+            padding: 10px 12px; background: var(--surface);
+            border-top: 1px solid var(--border); flex-shrink: 0;
+            display: flex; gap: 8px; align-items: flex-end;
+        }
+        #input {
+            flex: 1; font: inherit; font-size: 14px;
+            padding: 10px 14px; border: 1px solid var(--border);
+            border-radius: 22px; resize: none; outline: none;
+            max-height: 130px; overflow-y: auto; line-height: 1.4;
+            background: var(--bg); transition: border-color .15s;
+        }
+        #input:focus { border-color: var(--accent); background: #fff; }
+        #send-btn {
+            width: 40px; height: 40px; border-radius: 50%; border: none;
+            background: var(--accent); color: #fff;
+            font-size: 18px; cursor: pointer; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            transition: background .15s, transform .1s;
+        }
+        #send-btn:hover { background: var(--accent-hover); }
+        #send-btn:active { transform: scale(.93); }
+        #send-btn:disabled { background: #aaa; cursor: default; }
+    </style>
+</head>
+<body>
+<div id="app">
+    <header id="header">
+        <div class="avatar">🏠</div>
+        <div class="header-info">
+            <div class="name">Ассистент по аренде</div>
+            <div class="status">онлайн</div>
+        </div>
+    </header>
+
+    <div id="messages"></div>
+
+    <div id="input-area">
+        <textarea id="input" rows="1" placeholder="Написать сообщение..."></textarea>
+        <button id="send-btn" title="Отправить">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        </button>
+    </div>
+</div>
+
+<script>
+    const messagesEl = document.getElementById('messages');
+    const inputEl    = document.getElementById('input');
+    const sendBtn    = document.getElementById('send-btn');
+    let busy = false;
+
+    function scrollBottom(smooth) {
+        messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: smooth ? 'smooth' : 'instant' });
+    }
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function addUserBubble(text) {
+        const row = document.createElement('div');
+        row.className = 'msg-row user';
+        row.innerHTML = `
+            <div class="msg-avatar">👤</div>
+            <div class="bubble">${escapeHtml(text)}</div>`;
+        messagesEl.appendChild(row);
+        scrollBottom(true);
+    }
+
+    function addTyping() {
+        const row = document.createElement('div');
+        row.className = 'msg-row bot';
+        row.id = 'typing-indicator';
+        row.innerHTML = `
+            <div class="msg-avatar">🏠</div>
+            <div class="typing-bubble">
+                <span class="dot"></span>
+                <span class="dot"></span>
+                <span class="dot"></span>
+            </div>`;
+        messagesEl.appendChild(row);
+        scrollBottom(true);
+        return row;
+    }
+
+    function removeTyping() {
+        const el = document.getElementById('typing-indicator');
+        if (el) el.remove();
+    }
+
+    function renderTextMsg(content, isError) {
+        const row = document.createElement('div');
+        row.className = 'msg-row bot';
+        row.innerHTML = `
+            <div class="msg-avatar">🏠</div>
+            <div class="bubble${isError ? ' error' : ''}">${escapeHtml(content)}</div>`;
+        messagesEl.appendChild(row);
+    }
+
+    function renderButtons(buttons) {
+        const wrap = document.createElement('div');
+        wrap.className = 'buttons-row';
+        const inner = document.createElement('div');
+        inner.className = 'buttons-wrap';
+        buttons.forEach(btn => {
+            const b = document.createElement('button');
+            b.className = 'action-btn';
+            b.textContent = btn.label;
+            b.addEventListener('click', () => sendAction(btn.action));
+            inner.appendChild(b);
+        });
+        wrap.appendChild(inner);
+        messagesEl.appendChild(wrap);
+    }
+
+    function renderListing(msg) {
+        const l = msg.listing;
+        const wrap = document.createElement('div');
+        wrap.className = 'listing-wrap';
+
+        let photosHtml = '';
+        if (l.photo_urls && l.photo_urls.length > 0) {
+            const cls = l.photo_urls.length === 1 ? 'listing-photos one-photo' : 'listing-photos';
+            const imgs = l.photo_urls.slice(0, 4)
+                .map(u => `<img src="${escapeHtml(u)}" alt="фото" loading="lazy" onerror="this.style.display='none'">`)
+                .join('');
+            photosHtml = `<div class="${cls}">${imgs}</div>`;
+        }
+
+        const meta = [];
+        if (l.rooms != null) meta.push(`<span data-icon="🛏">${l.rooms} комн.</span>`);
+        if (l.area_m2 != null) meta.push(`<span data-icon="📐">${l.area_m2} м²</span>`);
+        if (l.floor != null && l.floors_total != null) meta.push(`<span data-icon="🏢">${l.floor}/${l.floors_total} эт.</span>`);
+        if (l.metro) meta.push(`<span data-icon="🚇">${escapeHtml(l.metro)}</span>`);
+        if (l.district) meta.push(`<span data-icon="📍">${escapeHtml(l.district)}</span>`);
+        if (l.address) meta.push(`<span data-icon="🗺">${escapeHtml(l.address)}</span>`);
+        if (l.contact_name) meta.push(`<span data-icon="👤">${escapeHtml(l.contact_name)}</span>`);
+        if (l.phone_numbers && l.phone_numbers.length) meta.push(`<span data-icon="📞">${escapeHtml(l.phone_numbers.join(', '))}</span>`);
+
+        const COLLAPSE_THRESHOLD = 160;
+        const descText = l.description || '';
+        const needsToggle = descText.length > COLLAPSE_THRESHOLD;
+        const descHtml = descText
+            ? `<div class="listing-desc${needsToggle ? ' collapsed' : ''}" data-full="${escapeHtml(descText)}">${escapeHtml(descText)}</div>
+               ${needsToggle ? '<button class="desc-toggle">Показать полностью</button>' : ''}`
+            : '';
+
+        const counterText = msg.total > 0
+            ? `${msg.position} из ${msg.total}`
+            : `#${msg.position}`;
+
+        wrap.innerHTML = `
+            <div class="listing-card">
+                ${photosHtml}
+                <div class="listing-body">
+                    <div class="listing-title">${escapeHtml(l.title)}</div>
+                    <div class="listing-price">${escapeHtml(l.price_label)}</div>
+                    <div class="listing-meta">${meta.join('')}</div>
+                    ${descHtml}
+                    <div class="listing-footer">
+                        <span class="listing-counter">Объявление ${escapeHtml(counterText)}</span>
+                        <a class="listing-link" href="${escapeHtml(l.url)}" target="_blank" rel="noopener">Открыть →</a>
+                        <div class="listing-nav">
+                            <button class="nav-btn" ${!msg.can_prev ? 'disabled' : ''} data-action="prev">← Назад</button>
+                            <button class="nav-btn" ${!msg.can_next ? 'disabled' : ''} data-action="next">Далее →</button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+
+        wrap.querySelectorAll('[data-action]').forEach(btn => {
+            btn.addEventListener('click', () => sendAction(btn.dataset.action));
+        });
+
+        const toggle = wrap.querySelector('.desc-toggle');
+        if (toggle) {
+            toggle.addEventListener('click', () => {
+                const desc = wrap.querySelector('.listing-desc');
+                if (!desc) return;
+                const collapsed = desc.classList.toggle('collapsed');
+                toggle.textContent = collapsed ? 'Показать полностью' : 'Свернуть';
+            });
+        }
+
+        messagesEl.appendChild(wrap);
+    }
+
+    function renderMessages(messages) {
+        messages.forEach(msg => {
+            if (msg.type === 'text') {
+                renderTextMsg(msg.content, msg.is_error || false);
+            } else if (msg.type === 'buttons') {
+                renderButtons(msg.buttons);
+            } else if (msg.type === 'listing') {
+                renderListing(msg);
+            }
+        });
+        scrollBottom(true);
+    }
+
+    async function sendAction(action) {
+        if (busy) return;
+        await doRequest({ action });
+    }
+
+    async function sendText() {
+        const text = inputEl.value.trim();
+        if (!text || busy) return;
+        inputEl.value = '';
+        inputEl.style.height = 'auto';
+        addUserBubble(text);
+        await doRequest({ text });
+    }
+
+    async function doRequest(payload) {
+        busy = true;
+        sendBtn.disabled = true;
+        const typing = addTyping();
+        try {
+            const resp = await fetch('/chat/message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: payload.text || '', action: payload.action || '' }),
+            });
+            removeTyping();
+            if (!resp.ok) {
+                renderTextMsg('Ошибка соединения с сервером. Попробуйте ещё раз.', true);
+                scrollBottom(true);
+                return;
+            }
+            const data = await resp.json();
+            renderMessages(data.messages || []);
+        } catch (err) {
+            removeTyping();
+            renderTextMsg('Ошибка соединения. Проверьте интернет и попробуйте снова.', true);
+            scrollBottom(true);
+            console.error('[chat] fetch error:', err);
+        } finally {
+            busy = false;
+            sendBtn.disabled = false;
+            inputEl.focus();
+        }
+    }
+
+    sendBtn.addEventListener('click', sendText);
+
+    inputEl.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendText();
+        }
+    });
+
+    inputEl.addEventListener('input', () => {
+        inputEl.style.height = 'auto';
+        inputEl.style.height = Math.min(inputEl.scrollHeight, 130) + 'px';
+    });
+
+    document.addEventListener('DOMContentLoaded', () => {
+        doRequest({ action: 'start' });
+        inputEl.focus();
+    });
+</script>
+</body>
+</html>

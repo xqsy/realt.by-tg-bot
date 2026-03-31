@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 import httpx
 
-from app.config import CITY_URLS, Settings
-from app.models import Listing, UserPreferences
+from core.config import CITY_URLS, Settings
+from core.models import Listing, UserPreferences
 
 
 @dataclass(slots=True)
@@ -53,14 +53,29 @@ class HousingQueryAnalyzer:
         prompt = (
             "Ты анализируешь запрос пользователя для подбора квартиры в долгосрочную аренду. "
             "Верни только JSON с полями intent, city_key, min_price, max_price, rooms, features, summary. "
-            "intent должен быть replace, если пользователь начинает новый поиск с новыми критериями, "
-            "или refine, если он дополняет или уточняет предыдущий запрос. "
+            "intent должен быть replace, если пользователь начинает новый поиск с новыми критериями; "
+            "refine, если он дополняет или уточняет предыдущий запрос; "
+            "off_topic, если запрос вообще не связан с поиском квартиры в аренду "
+            "(например, вопросы о погоде, новостях, помощь с кодом и т.д.). "
+            "При off_topic в summary напиши дружелюбный ответ, что ты помогаешь только с поиском квартир, "
+            "и предложи написать запрос типа \"двушка в Минске до 1200\". "
             "city_key может быть только одним из: "
             f"{city_options}. "
-            "Цены всегда возвращай в белорусских рублях, не в долларах. "
+            "Распознавай город в любой грамматической форме: "
+            "минск/минске/минска/в минск → minsk, "
+            "брест/бресте/в брест → brest, "
+            "могилев/могилеве/в могилев → mogilev, "
+            "гомель/гомеле/в гомель → gomel, "
+            "гродно/в гродно → grodno, "
+            "витебск/витебске/в витебск → vitebsk. "
+            "Если город упомянут, обязательно верни city_key — не оставляй null. "
+            "Цены всегда возвращай в белорусских рублях (BYN), не в долларах. "
+            "Слово 'тысяча', 'тысячу', 'тыща', 'тыщу', 'тыс', 'к' после числа означает ×1000: "
+            "'тыщу рублей' = 1000, '1.5 тыщи' = 1500, '2к' = 2000. "
             "Если пользователь пишет 'до 1200', 'за 1200', 'не дороже 1200' или просто указывает бюджет без нижней границы, "
             "то заполняй только max_price=1200, а min_price оставляй null. "
             "min_price заполняй только если пользователь явно задал нижнюю границу, например 'от 800'. "
+            "rooms — только целое число комнат (1, 2, 3...), либо null. "
             "Если значение неизвестно, верни null. features должен быть массивом коротких строк. "
             "summary должен быть кратким русским описанием распознанных критериев."
         )
@@ -104,14 +119,18 @@ class HousingQueryAnalyzer:
         city_key = parsed.get("city_key")
         if city_key not in CITY_URLS:
             city_key = None
+        if city_key is None:
+            city_key = self._detect_city_from_query(query)
         intent = str(parsed.get("intent") or "replace").strip().lower()
-        if intent not in {"replace", "refine"}:
+        if intent not in {"replace", "refine", "off_topic"}:
             intent = "replace"
         features = parsed.get("features")
         if not isinstance(features, list):
             features = []
         min_price = self._as_int(parsed.get("min_price"))
         max_price = self._as_int(parsed.get("max_price"))
+        min_price = self._fix_colloquial_price(query, min_price)
+        max_price = self._fix_colloquial_price(query, max_price)
         min_price, max_price = self._normalize_prices(query, min_price, max_price)
         return QueryAnalysis(
             original_query=query,
@@ -128,12 +147,17 @@ class HousingQueryAnalyzer:
     def _score_listing(self, listing: Listing, analysis: QueryAnalysis, prefs: UserPreferences) -> float:
         score = 0.0
         features = analysis.features or []
-        target_rooms = analysis.rooms if analysis.rooms is not None else prefs.rooms
-        if target_rooms is not None:
-            if listing.rooms == target_rooms:
+        if analysis.rooms is not None:
+            if listing.rooms == analysis.rooms:
                 score += 3.0
             elif listing.rooms is not None:
-                score -= abs(listing.rooms - target_rooms) * 1.5
+                score -= abs(listing.rooms - analysis.rooms) * 1.5
+        elif prefs.rooms is not None:
+            if listing.rooms in prefs.rooms:
+                score += 3.0
+            elif listing.rooms is not None:
+                min_diff = min(abs(listing.rooms - r) for r in prefs.rooms)
+                score -= min_diff * 1.5
         target_max_price = analysis.max_price if analysis.max_price is not None else prefs.max_price
         target_min_price = analysis.min_price if analysis.min_price is not None else prefs.min_price
         if listing.price_byn is not None:
@@ -167,6 +191,44 @@ class HousingQueryAnalyzer:
             score += min(listing.area_m2 / 100, 1.5)
         return score
 
+    _CITY_PATTERNS: dict[str, re.Pattern[str]] = {
+        "minsk":   re.compile(r"\bминск[аеу]?\b", re.IGNORECASE),
+        "brest":   re.compile(r"\bбрест[еу]?\b", re.IGNORECASE),
+        "mogilev": re.compile(r"\bмогилев[еу]?\b", re.IGNORECASE),
+        "gomel":   re.compile(r"\bгомел[ьея]\b", re.IGNORECASE),
+        "grodno":  re.compile(r"\bгродн[оа]\b", re.IGNORECASE),
+        "vitebsk": re.compile(r"\bвитебск[еу]?\b", re.IGNORECASE),
+    }
+    _KILO_PRICE_RE = re.compile(
+        r"(\d+(?:[.,]\d+)?)\s*(?:тысяч[аую]?|тыщ[аую]?|тыс\.?|к(?=\s|$))",
+        re.IGNORECASE,
+    )
+
+    def _detect_city_from_query(self, query: str) -> str | None:
+        for city_key, pattern in self._CITY_PATTERNS.items():
+            if pattern.search(query):
+                return city_key
+        return None
+
+    def _fix_colloquial_price(self, query: str, price: int | None) -> int | None:
+        if price is None:
+            return None
+        q = query.lower()
+        for match in self._KILO_PRICE_RE.finditer(q):
+            raw = match.group(1).replace(",", ".")
+            try:
+                candidate = round(float(raw) * 1000)
+                unscaled = round(float(raw))
+            except ValueError:
+                continue
+            if abs(price - unscaled) <= max(1, unscaled * 0.05):
+                return candidate
+        if price >= 10000 and re.search(
+            r"(?<![0-9.,])\s*(?:тысяч[аую]|тысяч[еи]|тыщ[аую])\b", q
+        ):
+            return 1000
+        return price
+
     def _as_int(self, value: object) -> int | None:
         if value is None or value == "":
             return None
@@ -193,6 +255,83 @@ class HousingQueryAnalyzer:
             elif min_price is not None and max_price is not None and min_price == max_price:
                 min_price = None
         return min_price, max_price
+
+    async def generate_listing_intro(
+        self,
+        listing: Listing,
+        user_query: str,
+        result_count: int,
+        analysis_summary: str = "",
+    ) -> str | None:
+        if not self._settings.ai_api_key or not self._settings.ai_model:
+            return None
+        try:
+            return await self._call_listing_intro(listing, user_query, result_count, analysis_summary)
+        except Exception as exc:
+            logging.warning("AI listing intro failed: %s", exc)
+            return None
+
+    async def _call_listing_intro(
+        self,
+        listing: Listing,
+        user_query: str,
+        result_count: int,
+        analysis_summary: str,
+    ) -> str:
+        listing_info = self._listing_brief_text(listing)
+        context = (
+            f"Запрос пользователя: «{user_query}»\n"
+            + (f"Распознано: {analysis_summary}\n" if analysis_summary else "")
+            + f"Результатов найдено: {result_count}\n"
+            f"Первое объявление:\n{listing_info}\n\n"
+            "Напиши краткое (1-2 предложения) дружелюбное сообщение, представляющее это объявление. "
+            "Без Markdown, без эмодзи."
+        )
+        payload = {
+            "model": self._settings.ai_model,
+            "temperature": 0.6,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты дружелюбный ассистент по аренде квартир в Беларуси. "
+                        "Отвечай по-русски, кратко, без форматирования."
+                    ),
+                },
+                {"role": "user", "content": context},
+            ],
+        }
+        async with httpx.AsyncClient(timeout=self._settings.request_timeout) as client:
+            response = await client.post(
+                f"{self._settings.ai_base_url.rstrip('/')}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self._settings.ai_api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com",
+                    "X-Title": "realt-bot",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+        data = response.json()
+        content = str(data["choices"][0]["message"].get("content") or "").strip()
+        return content if content else None
+
+    def _listing_brief_text(self, listing: Listing) -> str:
+        parts = [f"Название: {listing.title}", f"Цена: {listing.price_label}"]
+        if listing.address:
+            parts.append(f"Адрес: {listing.address}")
+        if listing.rooms is not None:
+            parts.append(f"Комнат: {listing.rooms}")
+        if listing.area_m2 is not None:
+            parts.append(f"Площадь: {listing.area_m2} м²")
+        if listing.floor is not None and listing.floors_total is not None:
+            parts.append(f"Этаж: {listing.floor} из {listing.floors_total}")
+        if listing.district:
+            parts.append(f"Район: {listing.district}")
+        if listing.metro:
+            parts.append(f"Метро: {listing.metro}")
+        return "\n".join(parts)
 
     def _parse_json_response(self, content: str) -> dict[str, object]:
         try:

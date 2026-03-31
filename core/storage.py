@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from app.models import UserPreferences
+from core.models import UserPreferences
 
 
 class UserPreferencesRepository:
@@ -26,11 +26,28 @@ class UserPreferencesRepository:
                     city_key TEXT NOT NULL,
                     min_price INTEGER NULL,
                     max_price INTEGER NULL,
-                    rooms INTEGER NULL
+                    rooms TEXT NULL
                 )
                 """
             )
             connection.commit()
+
+    @staticmethod
+    def _serialize_rooms(rooms: list[int] | None) -> str | None:
+        if not rooms:
+            return None
+        return ",".join(str(r) for r in sorted(rooms))
+
+    @staticmethod
+    def _deserialize_rooms(value: object) -> list[int] | None:
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return [value]
+        text = str(value).strip()
+        if not text:
+            return None
+        return [int(p) for p in text.split(",") if p.strip().isdigit()]
 
     def get(self, user_id: int) -> UserPreferences:
         with self._connect() as connection:
@@ -47,7 +64,7 @@ class UserPreferencesRepository:
             city_key=row["city_key"],
             min_price=row["min_price"],
             max_price=row["max_price"],
-            rooms=row["rooms"],
+            rooms=self._deserialize_rooms(row["rooms"]),
         )
 
     def save(self, prefs: UserPreferences) -> None:
@@ -62,6 +79,6 @@ class UserPreferencesRepository:
                     max_price = excluded.max_price,
                     rooms = excluded.rooms
                 """,
-                (prefs.user_id, prefs.city_key, prefs.min_price, prefs.max_price, prefs.rooms),
+                (prefs.user_id, prefs.city_key, prefs.min_price, prefs.max_price, self._serialize_rooms(prefs.rooms)),
             )
             connection.commit()

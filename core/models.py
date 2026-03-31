@@ -10,7 +10,7 @@ class UserPreferences:
     city_key: str = "minsk"
     min_price: int | None = None
     max_price: int | None = None
-    rooms: int | None = None
+    rooms: list[int] | None = None
 
 
 @dataclass(slots=True)

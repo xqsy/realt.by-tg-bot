@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
 from dataclasses import replace
 
-from app.config import CITY_URLS, Settings
-from app.models import Listing, SearchPageResult, SearchResult, UserPreferences
+from core.config import CITY_URLS, CITY_UUIDS, Settings
+from core.models import Listing, SearchPageResult, SearchResult, UserPreferences
 
 PRICE_RE = re.compile(r"(\d[\d \xa0]{0,15})\s*р\./мес\.", re.IGNORECASE)
 USD_RE = re.compile(r"≈\s*(\d[\d \xa0]{0,10})\s*\$/мес\.", re.IGNORECASE)
@@ -80,7 +80,6 @@ class RealtParser:
         await self._client.aclose()
 
     async def search(self, prefs: UserPreferences, limit: int | None = None) -> SearchResult:
-        city_label, base_url = CITY_URLS[prefs.city_key]
         listings: list[Listing] = []
         seen_ids: set[str] = set()
         page = 1
@@ -92,11 +91,33 @@ class RealtParser:
             if not page_result.had_candidates:
                 break
             page += 1
-        return SearchResult(items=listings, source_url=base_url)
+        return SearchResult(items=listings, source_url=self._build_search_url(prefs, page=1))
+
+    def _build_search_url(self, prefs: UserPreferences, page: int) -> str:
+        _, base_url = CITY_URLS[prefs.city_key]
+        params: list[str] = []
+        city_uuid = CITY_UUIDS.get(prefs.city_key)
+        if city_uuid:
+            address_v2 = quote(f'[{{"townUuid":"{city_uuid}"}}]', safe="")
+            params.append(f"addressV2={address_v2}")
+        if prefs.rooms:
+            for r in sorted(prefs.rooms):
+                params.append(f"rooms={r}")
+        if prefs.min_price is not None:
+            params.append(f"priceFrom={prefs.min_price}")
+        if prefs.max_price is not None:
+            params.append(f"priceTo={prefs.max_price}")
+        if prefs.min_price is not None or prefs.max_price is not None:
+            params.append("priceType=933")
+        if page > 1:
+            params.append(f"page={page}")
+        if params:
+            return f"{base_url}?{'&'.join(params)}"
+        return base_url
 
     async def search_page(self, prefs: UserPreferences, page: int, seen_ids: set[str] | None = None) -> SearchPageResult:
         city_label, base_url = CITY_URLS[prefs.city_key]
-        page_url = base_url if page == 1 else f"{base_url}?page={page}"
+        page_url = self._build_search_url(prefs, page)
         html = await self._fetch(page_url)
         page_listings = self._extract_listings_from_page(html, base_url, city_label)
         max_page = self._extract_max_page(html)
@@ -346,7 +367,7 @@ class RealtParser:
             if listing.price_byn is None or listing.price_byn > prefs.max_price:
                 return False
         if prefs.rooms is not None:
-            if listing.rooms is None or listing.rooms != prefs.rooms:
+            if listing.rooms is None or listing.rooms not in prefs.rooms:
                 return False
         return True
 

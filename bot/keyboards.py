@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.config import CITY_URLS
+from core.config import CITY_URLS
 
 
 def city_keyboard() -> InlineKeyboardMarkup:
@@ -35,7 +35,8 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def filters_keyboard(current_rooms: int | None) -> InlineKeyboardMarkup:
+def filters_keyboard(current_rooms: list[int] | None) -> InlineKeyboardMarkup:
+    rooms_label = ", ".join(str(r) for r in sorted(current_rooms)) if current_rooms else "любые"
     return InlineKeyboardMarkup(
         [
             [
@@ -43,7 +44,7 @@ def filters_keyboard(current_rooms: int | None) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Макс. цена", callback_data="filter:max_price"),
             ],
             [
-                InlineKeyboardButton(text=f"Комнаты: {current_rooms or 'любые'}", callback_data="filter:rooms"),
+                InlineKeyboardButton(text=f"Комнаты: {rooms_label}", callback_data="filter:rooms"),
                 InlineKeyboardButton(text="Сбросить цену", callback_data="filter:clear_price"),
             ],
             [
@@ -53,16 +54,18 @@ def filters_keyboard(current_rooms: int | None) -> InlineKeyboardMarkup:
     )
 
 
-def rooms_keyboard() -> InlineKeyboardMarkup:
+def rooms_keyboard(current_rooms: list[int] | None = None) -> InlineKeyboardMarkup:
+    selected = set(current_rooms) if current_rooms else set()
+
+    def _btn(n: int) -> InlineKeyboardButton:
+        label = f"✓ {n}" if n in selected else str(n)
+        return InlineKeyboardButton(text=label, callback_data=f"rooms:toggle:{n}")
+
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton(text="1", callback_data="rooms:1"),
-                InlineKeyboardButton(text="2", callback_data="rooms:2"),
-                InlineKeyboardButton(text="3", callback_data="rooms:3"),
-                InlineKeyboardButton(text="4", callback_data="rooms:4"),
-            ],
+            [_btn(1), _btn(2), _btn(3), _btn(4), _btn(5)],
             [InlineKeyboardButton(text="Любое количество", callback_data="rooms:any")],
+            [InlineKeyboardButton(text="Готово", callback_data="rooms:done")],
         ]
     )
 

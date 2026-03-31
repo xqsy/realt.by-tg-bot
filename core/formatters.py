@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models import Listing, UserPreferences
+from core.models import Listing, UserPreferences
 
 HIDDEN_ATTRIBUTE_SECTIONS = {"Местоположение"}
 HIDDEN_ATTRIBUTE_KEYS = {"furniture", "мебель"}
@@ -13,7 +13,7 @@ def _normalize_attribute_key(value: object) -> str:
 def format_preferences(prefs: UserPreferences, city_label: str) -> str:
     min_price = str(prefs.min_price) if prefs.min_price is not None else "не задана"
     max_price = str(prefs.max_price) if prefs.max_price is not None else "не задана"
-    rooms = str(prefs.rooms) if prefs.rooms is not None else "любое"
+    rooms = ", ".join(str(r) for r in sorted(prefs.rooms)) if prefs.rooms else "любое"
     return (
         "Текущие параметры поиска\n"
         f"Город: {city_label}\n"

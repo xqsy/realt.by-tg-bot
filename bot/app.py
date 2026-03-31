@@ -8,13 +8,13 @@ from telegram import Update
 from telegram.error import BadRequest
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
-from app.ai import HousingQueryAnalyzer, QueryAnalysis
-from app.config import CITY_URLS, load_settings
-from app.formatters import format_listing_full, format_preferences, split_message
-from app.keyboards import city_keyboard, filters_keyboard, main_menu_keyboard, rooms_keyboard, search_navigation_keyboard
-from app.models import UserPreferences
-from app.parser import RealtParser
-from app.storage import UserPreferencesRepository
+from bot.keyboards import city_keyboard, filters_keyboard, main_menu_keyboard, rooms_keyboard, search_navigation_keyboard
+from core.ai import HousingQueryAnalyzer, QueryAnalysis
+from core.config import CITY_URLS, load_settings
+from core.formatters import format_listing_full, format_preferences, split_message
+from core.models import UserPreferences
+from core.parser import RealtParser
+from core.storage import UserPreferencesRepository
 
 settings = load_settings()
 repository = UserPreferencesRepository(settings.data_dir / "users.sqlite3")
@@ -268,7 +268,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.message.reply_text("Введите максимальную цену в BYN, например: 1200")
         return
     if data == "filter:rooms":
-        await query.message.reply_text("Выберите количество комнат:", reply_markup=rooms_keyboard())
+        await query.message.reply_text("Выберите количество комнат:", reply_markup=rooms_keyboard(prefs.rooms))
         return
     if data == "filter:clear_price":
         prefs.min_price = None
@@ -286,15 +286,39 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except BadRequest:
             pass
         return
-    if data.startswith("rooms:"):
-        value = data.split(":", 1)[1]
-        prefs.rooms = None if value == "any" else int(value)
+    if data == "rooms:any":
+        prefs.rooms = None
         repository.save(prefs)
         _clear_search_state(context)
+        try:
+            await query.edit_message_reply_markup(reply_markup=rooms_keyboard(prefs.rooms))
+        except BadRequest:
+            pass
+        return
+    if data == "rooms:done":
+        try:
+            await query.message.delete()
+        except BadRequest:
+            pass
         await query.message.reply_text(
             format_preferences(prefs, _city_label(prefs.city_key)),
             reply_markup=main_menu_keyboard(),
         )
+        return
+    if data.startswith("rooms:toggle:"):
+        value = int(data.split(":", 2)[2])
+        current = list(prefs.rooms) if prefs.rooms else []
+        if value in current:
+            current.remove(value)
+        else:
+            current.append(value)
+        prefs.rooms = sorted(current) if current else None
+        repository.save(prefs)
+        _clear_search_state(context)
+        try:
+            await query.edit_message_reply_markup(reply_markup=rooms_keyboard(prefs.rooms))
+        except BadRequest:
+            pass
         return
 
 
@@ -341,6 +365,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         pass
     if not analysis.ai_available:
         await update.message.reply_text("ИИ-поиск временно недоступен. Попробуйте позже или используйте фильтры вручную.", reply_markup=main_menu_keyboard())
+        return
+    if analysis.intent == "off_topic":
+        reply = analysis.summary or "Я помогаю только с поиском квартир в аренду. Напишите, например: «двушка в Минске до 1200»."
+        await update.message.reply_text(reply, reply_markup=main_menu_keyboard())
         return
     if not analysis.has_updates():
         await update.message.reply_text(
@@ -516,7 +544,7 @@ def _apply_query_analysis(prefs: UserPreferences, analysis: QueryAnalysis) -> Us
     if analysis.max_price is not None:
         updated.max_price = analysis.max_price
     if analysis.rooms is not None:
-        updated.rooms = analysis.rooms
+        updated.rooms = [analysis.rooms]
     return updated
 
 
@@ -529,7 +557,8 @@ def _format_analysis_result(prefs: UserPreferences, analysis: QueryAnalysis) -> 
     lines.append(f"Город: {_city_label(prefs.city_key)}")
     lines.append(f"Цена от: {prefs.min_price if prefs.min_price is not None else 'не задана'}")
     lines.append(f"Цена до: {prefs.max_price if prefs.max_price is not None else 'не задана'}")
-    lines.append(f"Комнаты: {prefs.rooms if prefs.rooms is not None else 'любое количество'}")
+    rooms_str = ", ".join(str(r) for r in sorted(prefs.rooms)) if prefs.rooms else "любое количество"
+    lines.append(f"Комнаты: {rooms_str}")
     if analysis.features:
         lines.append("Пожелания: " + ", ".join(analysis.features))
     return "\n".join(lines)
